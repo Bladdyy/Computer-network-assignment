@@ -110,7 +110,7 @@ static struct sockaddr_in get_server_address(char const *host, uint16_t port, in
         fprintf(stderr, "ERROR: Couldn't get address information.\n");
     }
 
-    // Creating socket address information.
+    // Updating socket address information.
     struct sockaddr_in send_address;
     send_address.sin_family = fam;
     send_address.sin_addr.s_addr =
@@ -173,19 +173,19 @@ int send_udp_pack(int socket_fd, package *pack, size_t size, struct sockaddr_in 
     ssize_t sent_length = sendto(socket_fd, pack, size, 0,
                                  (struct sockaddr *) &server_address, sizeof(server_address));
     if (sent_length < 0) {  // Couldn't send.
-        fprintf(stderr, "ERROR: Package with id %d not sent.\n", pack->id);
+        fprintf(stderr, "ERROR: Couldn't send Package with id %d.\n", pack->id);
         code = 1;
     }
     else if ((size_t) sent_length != sizeof(package)) {  // Couldn't send fully
-        fprintf(stderr, "ERROR: Package with id %d not sent fully.\n", pack->id);
+        fprintf(stderr, "ERROR: Package with id %d was sent incompletely.\n", pack->id);
     }
     free(pack);
     return code;
 }
 
 
-// Receives package using UDP protocol.
-int recv_udp_port(int socket_fd, unsigned long long sess_id){
+// Receives package using UDP protocol. TODO: MAX WAIT.
+int recv_udp_prot(int socket_fd, unsigned long long sess_id){
     package* back = malloc(sizeof(package));  // Allocating space for new package.
     if (back == NULL){
         fprintf(stderr, "ERROR: Problem with allocation.\n");
@@ -195,9 +195,15 @@ int recv_udp_port(int socket_fd, unsigned long long sess_id){
     // TODO: RECV FROM przyjmuje strukture?
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(package), 0,
                                        (struct sockaddr *) &receive_address, (socklen_t *) sizeof(receive_address));
-    if (received_length < 0 || sess_id != back->session_id) {
+    if (received_length < 0){  // No message received.
+        fprintf(stderr, "ERROR: Couldn't receive message.\n");
         free(back);
         return -2;
+    }
+    else if (sess_id != back->session_id) {  // Session ID of message is not equal to client session ID.
+        fprintf(stderr, "ERROR: Received message has wrong session ID");
+        free(back);
+        return -3;
     }
     free(back);
     return back->id;
@@ -205,33 +211,27 @@ int recv_udp_port(int socket_fd, unsigned long long sess_id){
 
 
 // Sends packages of data to server using UDP protocol.
-int udp_conn(char const *host, uint16_t port, msg_list* core){
-    unsigned long long sess_id = gen_sess_id();
-    struct sockaddr_in server_address = get_server_address(host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (socket_fd < 0) {
-        fprintf(stderr,"ERROR: Couldn't create a socket\n");
-        return 1;
-    }
-
+int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id){
+    // Creating 'CONN' package.
     package *conn = malloc(sizeof(package));
     malloc_error(conn);
     create_pack(conn, 1, sess_id, 2, get_length(core), 0, 0, NULL);
 
+    // Sending 'CONN' package.
     if (send_udp_pack(socket_fd, conn, sizeof(package), server_address) == 1) {
         return 1;
     }
 
-    // Receive a message. Buffer should not be allocated on the stack.
-    int back_id = recv_udp_port(socket_fd, sess_id);
-    if (back_id == 3){
+    // Receive a message.
+    int back_id = recv_udp_prot(socket_fd, sess_id);
+    if (back_id == 3){  // Received 'CONRJT'.
         printf("Connection dismissed by server.\n");
         return 0;
     }
-    else if (back_id == 2){
+    else if (back_id == 2){  // Received 'CONACC'.
         msg_list* act = core;
         unsigned long long pack_id = 0;
-        while (act != NULL){
+        while (act != NULL){  // Sending 'DATA" packages.
             package *data = malloc(sizeof(package));
             if (malloc_error(data) == 1){
                 return 1;
@@ -243,15 +243,13 @@ int udp_conn(char const *host, uint16_t port, msg_list* core){
             act = act->next;
             pack_id++;
         }
+        if (recv_udp_prot(socket_fd, sess_id) != 7){  // Waiting for 'RCVD' after sending all 'DATA'.
+            fprintf(stderr, "ERROR: Didn't get RECV\n");
+        }
     }
     else{
-        if (back_id != -2){
-            fprintf(stderr, "ERROR: Wrong ID from server.\n");
-        }
+        fprintf(stderr, "ERROR: Received message has wrong protocol ID.");
         return 1;
-    }
-    if (recv_udp_port(socket_fd, sess_id) != 7){
-        fprintf(stderr, "ERROR: Didn't get RECV\n");
     }
     return 0;
 }
@@ -278,12 +276,24 @@ int main(int argc, char *argv[]) {
         free_msg(core);
         return 1;
     }
-
+    if (get_length(core) == 0){
+        fprintf(stderr, "ERROR: Won't send an empty message.\n");
+        return 1;
+    }
+    unsigned long long sess_id = gen_sess_id();
     if (strcmp(protocol, "udp") == 0){
-        if(udp_conn(host, port, core) == 1){
-            free_msg(core);
+        struct sockaddr_in server_address = get_server_address(host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (socket_fd < 0) {
+            fprintf(stderr,"ERROR: Couldn't create a socket\n");
             return 1;
         }
+        if(udp_conn(host, port, core, socket_fd, server_address, sess_id) == 1){
+            free_msg(core);
+            close(socket_fd);
+            return 1;
+        }
+        close(socket_fd);
     }
     else{
         free_msg(core);
