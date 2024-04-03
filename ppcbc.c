@@ -28,19 +28,17 @@ typedef struct package{
     unsigned long long length;
     unsigned long long pack_id;
     unsigned long int bit_len;
-    char* data;
 } package;
 
 
 // Creates pack with given data.
-void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len, char* data){
+void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len){
     pack->id = id;
     pack->session_id = sess_id;
     pack->protocol = prot;
     pack->length = len;
     pack->pack_id = pack_id;
     pack->bit_len = bit_len;
-    pack->data = data;
 }
 
 
@@ -168,45 +166,58 @@ int get_stdin(msg_list* core){
 
 
 // Sends one package to server using UDP protocol.
-int send_udp_pack(int socket_fd, package *pack, size_t size, struct sockaddr_in server_address){
+int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_address, char* msg){
     int code = 0;  // Return code.
-    ssize_t sent_length = sendto(socket_fd, pack, size, 0,
+    void* buffer = malloc(sizeof(package) + pack->bit_len);  // Buffer with package and message.
+    if (buffer == NULL){
+        fprintf(stderr, "ERROR: Problem with allocation.\n");
+        return -1;
+    }
+
+    // Copying data to buffer.
+    memcpy(buffer, pack, sizeof(package));
+    memcpy(buffer + sizeof(package), msg, pack->bit_len);
+
+    // Sending buffer to server.
+    ssize_t sent_length = sendto(socket_fd, buffer, sizeof(package) + pack->bit_len, 0,
                                  (struct sockaddr *) &server_address, sizeof(server_address));
     if (sent_length < 0) {  // Couldn't send.
         fprintf(stderr, "ERROR: Couldn't send Package with id %d.\n", pack->id);
         code = 1;
     }
-    else if ((size_t) sent_length != sizeof(package)) {  // Couldn't send fully
+    else if ((size_t) sent_length != sizeof(package) + pack->bit_len) {  // Couldn't send fully
         fprintf(stderr, "ERROR: Package with id %d was sent incompletely.\n", pack->id);
     }
-    free(pack);
+    free(buffer);
     return code;
 }
 
 
 // Receives package using UDP protocol. TODO: MAX WAIT.
 int recv_udp_prot(int socket_fd, unsigned long long sess_id){
-    package* back = malloc(sizeof(package));  // Allocating space for new package.
+    package *back = malloc(sizeof(package));  // Allocating space for new package.
     if (back == NULL){
         fprintf(stderr, "ERROR: Problem with allocation.\n");
         return -1;
     }
     struct sockaddr_in receive_address;
-    // TODO: RECV FROM przyjmuje strukture?
+    socklen_t address_length = (socklen_t) sizeof(receive_address);
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(package), 0,
-                                       (struct sockaddr *) &receive_address, (socklen_t *) sizeof(receive_address));
+                                       (struct sockaddr *) &receive_address, &address_length);
+    unsigned char id = back->id;
+    unsigned long long sess = back->session_id ;
     if (received_length < 0){  // No message received.
         fprintf(stderr, "ERROR: Couldn't receive message.\n");
         free(back);
         return -2;
     }
-    else if (sess_id != back->session_id) {  // Session ID of message is not equal to client session ID.
-        fprintf(stderr, "ERROR: Received message has wrong session ID");
+    else if (sess_id != sess) {  // Session ID of message is not equal to client session ID.
+        fprintf(stderr, "ERROR: Received message has wrong session ID\n");
         free(back);
         return -3;
     }
     free(back);
-    return back->id;
+    return id;
 }
 
 
@@ -215,13 +226,12 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
     // Creating 'CONN' package.
     package *conn = malloc(sizeof(package));
     malloc_error(conn);
-    create_pack(conn, 1, sess_id, 2, get_length(core), 0, 0, NULL);
+    create_pack(conn, 1, sess_id, 2, get_length(core), 0, 0);
 
     // Sending 'CONN' package.
-    if (send_udp_pack(socket_fd, conn, sizeof(package), server_address) == 1) {
+    if (send_udp_pack(socket_fd, conn, server_address, NULL) == 1) {
         return 1;
     }
-
     // Receive a message.
     int back_id = recv_udp_prot(socket_fd, sess_id);
     if (back_id == 3){  // Received 'CONRJT'.
@@ -236,10 +246,12 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
             if (malloc_error(data) == 1){
                 return 1;
             }
-            create_pack(data, 4, sess_id, 2, 0, pack_id, act->length, act->msg);
-            if (send_udp_pack(socket_fd, data, sizeof(package), server_address) == 1){
+            create_pack(data, 4, sess_id, 2, 0, pack_id, act->length);
+            if (send_udp_pack(socket_fd, data, server_address, act->msg) == 1){
+                free(data);
                 return 1;
             }
+            free(data);
             act = act->next;
             pack_id++;
         }
@@ -248,7 +260,7 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
         }
     }
     else{
-        fprintf(stderr, "ERROR: Received message has wrong protocol ID.");
+        fprintf(stderr, "ERROR: Received message has wrong protocol ID.\n");
         return 1;
     }
     return 0;
@@ -272,22 +284,23 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "ERROR: Problem with allocation.\n");
         return 1;
     }
-    if (get_stdin(core) == 1){
+    if (get_stdin(core) == 1){  // Reading the message from stdin.
         free_msg(core);
         return 1;
     }
-    if (get_length(core) == 0){
+    if (get_length(core) == 0){  // Checking if message is not empty.
         fprintf(stderr, "ERROR: Won't send an empty message.\n");
         return 1;
     }
-    unsigned long long sess_id = gen_sess_id();
-    if (strcmp(protocol, "udp") == 0){
+    unsigned long long sess_id = gen_sess_id();  // Generating session id.
+    if (strcmp(protocol, "udp") == 0){  // Sending the message using UDP protocol.
         struct sockaddr_in server_address = get_server_address(host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
         if (socket_fd < 0) {
             fprintf(stderr,"ERROR: Couldn't create a socket\n");
             return 1;
         }
+
         if(udp_conn(host, port, core, socket_fd, server_address, sess_id) == 1){
             free_msg(core);
             close(socket_fd);

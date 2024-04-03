@@ -1,4 +1,3 @@
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -9,6 +8,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
+#define MAX_MSG 64000
 
 // Data package components.
 typedef struct package{
@@ -18,19 +18,17 @@ typedef struct package{
     unsigned long long length;
     unsigned long long pack_id;
     unsigned long int bit_len;
-    char* data;
 } package;
 
 
 // Creates pack with given data.
-void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len, char* data){
+void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len){
     pack->id = id;
     pack->session_id = sess_id;
     pack->protocol = prot;
     pack->length = len;
     pack->pack_id = pack_id;
     pack->bit_len = bit_len;
-    pack->data = data;
 }
 
 
@@ -50,20 +48,21 @@ int send_pack(int socket_fd, package *to_send, struct sockaddr_in client_address
 }
 
 
-void DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last, package *prot, int socket_fd, struct sockaddr_in client_address, socklen_t address_length){
+void DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last, package *prot, int socket_fd, struct sockaddr_in client_address, socklen_t address_length, void* msg){
     package *to_send = malloc(sizeof(package));
     int change = 0;
     if (!(*sess_id == prot->session_id && *last + 1 == prot->pack_id)){
-        create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0, NULL);
+        create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0);
         send_pack(socket_fd, to_send, client_address, address_length);
         change = 1;
     }
     else{
+        write(STDOUT_FILENO, msg, prot->bit_len);
+        *unpack -= prot->bit_len;
         if (*unpack == 0){
-            create_pack(to_send, 7, prot->session_id, 0, 0, 0, 0, NULL);
+            create_pack(to_send, 7, prot->session_id, 0, 0, 0, 0);
             send_pack(socket_fd, to_send, client_address, address_length);
             change = 1;
-            write(STDOUT_FILENO, prot->data, prot->bit_len);
         }
     }
     if (change == 1){
@@ -79,7 +78,7 @@ void CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, packa
     if (*sess_id == -1){
         *sess_id = prot->session_id;
         *unpack = prot->length;
-        create_pack(to_send, 2, prot->session_id, 0, 0, 0,0, NULL);
+        create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);
         int code = send_pack(socket_fd, to_send, client_address, address_length);
         if (*sess_id == prot->session_id && code == 1){
             *sess_id = -1;
@@ -87,14 +86,13 @@ void CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, packa
         }
     }
     else{
-        create_pack(to_send, 3, prot->session_id, 0, 0, 0,0, NULL);
+        create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);
         send_pack(socket_fd, to_send, client_address, address_length);
         if (*sess_id == prot->session_id){
             *sess_id = -1;
             *unpack = -1;
         }
     }
-    free(to_send);
 }
 // Creates port. TODO: RETURN ERROR (for example 1).
 static uint16_t read_port(char const *string) {
@@ -120,30 +118,38 @@ int udp_server(uint16_t port, int socket_fd){
         return 1;
     }
     for (;;) {
-        // Receive a message. Buffer should not be allocated on the stack.
-        package *prot = malloc(sizeof(package));
+        void *buff = malloc(sizeof(package) + MAX_MSG);
         struct sockaddr_in client_address;
         socklen_t address_length = (socklen_t) sizeof(client_address);
-        size_t received_length = recvfrom(socket_fd, prot, sizeof(package), 0,
-                                   (struct sockaddr *) &client_address, &address_length);
+        ssize_t received_length = recvfrom(socket_fd, buff, sizeof(package) + MAX_MSG, 0,
+                                          (struct sockaddr *) &client_address, &address_length);
+
         if (received_length < 0) {
             fprintf(stderr, "ERROR: Couldn't receive message.\n");
         }
-        else if (received_length != sizeof(package)){
-            fprintf(stderr, "ERROR: Couldn't receive whole message.\n");
+        else{
+            package *prot = malloc(sizeof(package));
+            memcpy(prot, buff, sizeof(package));
+            if (prot->id == 1 && prot->protocol == 2){
+                CONN_handler(&sess_id, &unpack, prot, socket_fd, client_address, address_length);
+            }
+            else if (prot->id == 4 && prot->session_id == sess_id){
+                char* msg = malloc(prot->bit_len);
+                memcpy(msg, buff + sizeof(package), prot->bit_len);
+                DATA_handler(&sess_id, &unpack, &last, prot, socket_fd, client_address, address_length, msg);
+                free(msg);
+            }
+            free(prot);
         }
-        else if (prot->id == 1 && prot->protocol == 2){
-            CONN_handler(&sess_id, &unpack, prot, socket_fd, client_address, address_length);
-        }
-        else if (prot->id == 3 && prot->session_id == sess_id){
-            DATA_handler(&sess_id, &unpack, &last, prot, socket_fd, client_address, address_length);
-        }
-        free(prot);
+        free(buff);
     }
     return 0;
 }
 
 
+
+// Creates server with specified protocol.
+// Receives protocols
 int main(int argc, char *argv[]) {
     if (argc != 3) {  // Checks for 2 arguments.
         fprintf(stderr, "ERROR: Expected arguments: %s <communication protocol> <port>\n", argv[0]);
@@ -151,12 +157,12 @@ int main(int argc, char *argv[]) {
     }
     char const *protocol = argv[1];  // Communication protocol.
     uint16_t port = read_port(argv[2]);
-    int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (socket_fd < 0) {
-        fprintf(stderr,"ERROR: Couldn't create a socket\n");
-        return 1;
-    }
     if (strcmp(protocol, "udp") == 0){
+        int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (socket_fd < 0) {
+            fprintf(stderr,"ERROR: Couldn't create a socket\n");
+            return 1;
+        }
         if (udp_server(port, socket_fd) == 1){
             close(socket_fd);
             return 1;
