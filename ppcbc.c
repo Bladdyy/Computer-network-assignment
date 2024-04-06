@@ -201,7 +201,7 @@ int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_addres
 }
 
 
-// Receives package using UDP protocol. TODO: MAX WAIT.
+// Receives package using UDP protocol.
 int recv_udp_prot(int socket_fd, unsigned long long sess_id){
     package *back = malloc(sizeof(package));  // Allocating space for new package.
     if (malloc_error(back) == 1){
