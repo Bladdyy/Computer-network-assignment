@@ -14,6 +14,7 @@
 // Max package size.
 #define MAX_MSG 64000
 #define MAX_WAIT 10
+#define MAX_RETRANSMITS 3
 
 
 // Stdin data storage.
@@ -212,7 +213,7 @@ int recv_udp_prot(int socket_fd, unsigned long long sess_id){
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(package), 0,
                                        (struct sockaddr *) &receive_address, &address_length);
     unsigned char id = back->id;
-    unsigned long long sess = back->session_id ;
+    unsigned long long sess = back->session_id;
     free(back);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){
@@ -233,8 +234,84 @@ int recv_udp_prot(int socket_fd, unsigned long long sess_id){
 }
 
 
+// Receives ACC. Sets past accepts ID's to '2'.
+int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_id){
+    package *back = malloc(sizeof(package));  // Allocating space for new package.
+    if (malloc_error(back) == 1){
+        return -1;
+    }
+    struct sockaddr_in receive_address;
+    socklen_t address_length = (socklen_t) sizeof(receive_address);
+    ssize_t received_length = recvfrom(socket_fd, back, sizeof(package), 0,
+                                       (struct sockaddr *) &receive_address, &address_length);
+
+    unsigned char id = back->id;
+    unsigned long long sess = back->session_id;
+    unsigned long long pack = back->pack_id;
+    free(back);
+
+    if (received_length < 0){  // No message received.
+        if (errno == EAGAIN){  // Timeout.
+            fprintf(stderr, "ERROR: Message timeout.\n");
+            return -4;
+        }
+        else{
+            fprintf(stderr, "ERROR: Couldn't receive message.\n");
+            return -2;
+        }
+    }
+    else if (sess_id != sess) {  // Session ID of message is not equal to client session ID.
+        fprintf(stderr, "ERROR: Received message has wrong session ID\n");
+        return -3;
+    }
+    else if (pack_id != pack && id == 5){  // Pack ID isn't correct, but ACC received.
+        if (pack_id > pack){  // Old ACC.
+            return 2;
+        }
+        else{  // Incorrect ACC.
+            fprintf(stderr, "ERROR: Incorrect message received.\n");
+            return -1;
+        }
+    }
+    return id;
+}
+
+//  Tries to receive ACC.
+int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_id, package* data, struct sockaddr_in server_address, char* msg){
+    int back_id = recv_ACC(socket_fd, sess_id, pack_id);
+    unsigned long long trial = 0;
+    while ((back_id == -4 || back_id == 2) && trial < MAX_RETRANSMITS){  // While receives past accepts or timeouts.
+        if (back_id == -4){  // Timeout
+            trial++;
+            // Retransmits.
+            if (send_udp_pack(socket_fd, data, server_address, msg) == 1){
+                free(data);
+                return 1;
+            }
+        }
+        // Tries to receive ACC again.
+        back_id = recv_ACC(socket_fd, sess_id, pack_id);
+    }
+
+    if (back_id == -4){  // Too many timeouts.
+        fprintf(stderr, "ERROR: Too many message timeouts.\n");
+        return 1;
+    }
+    else if (back_id < 0){  // Incorrect package.
+        fprintf(stderr, "ERROR: Received message is incorrect.\n");
+        return 1;
+    }
+    else if (back_id != 5){  // Correct package, but not ACC or past accept.
+        fprintf(stderr, "ERROR: Received message has wrong package ID.\n");
+        return 1;
+    }
+    return 0;
+}
+
+
+
 // Sends packages of data to server using UDP protocol.
-int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id){
+int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id, bool udpr){
     // Creating 'CONN' package.
     package *conn = malloc(sizeof(package));
     if (malloc_error(conn) == 1){
@@ -247,7 +324,18 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
         return 1;
     }
     // Receive a message.
+    unsigned long long trial = 0;
     int back_id = recv_udp_prot(socket_fd, sess_id);
+
+    // Retransmissions.
+    while (back_id == -4 && udpr && trial < MAX_RETRANSMITS){
+        if (send_udp_pack(socket_fd, conn, server_address, NULL) == 1) {
+            return 1;
+        }
+        back_id = recv_udp_prot(socket_fd, sess_id);
+        trial++;
+    }
+
     if (back_id == 3){  // Received 'CONRJT'.
         printf("Connection dismissed by server.\n");
         return 0;
@@ -260,18 +348,31 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
             if (malloc_error(data) == 1){
                 return 1;
             }
+
             create_pack(data, 4, sess_id, 2, 0, pack_id, act->length);
-            if (send_udp_pack(socket_fd, data, server_address, act->msg) == 1){  // Couldn't send.
+            // Tries sending part of the message.
+            if (send_udp_pack(socket_fd, data, server_address, act->msg) == 1){
+                free(data);
+                return 1;
+            }
+
+            // Retransmissions.
+            if (udpr && get_ACC(socket_fd, sess_id, pack_id, data, server_address, act->msg) == 1){
                 free(data);
                 return 1;
             }
             free(data);
-            act = act->next;
+            act = act->next;  // Next part of message.
             pack_id++;
         }
-        int recv = recv_udp_prot(socket_fd, sess_id);
+
+        int recv;
+        do{
+            recv = recv_ACC(socket_fd, sess_id, pack_id);
+        } while (recv == 2);  // Receiving past accepts.
+
         if (recv == -4){
-            fprintf(stderr, "ERROR: Message recieve timeout.\n");
+            fprintf(stderr, "ERROR: Message timeout.\n");
             return 1;
         }
         else if (recv != 7){  // Waiting for 'RCVD' after sending all 'DATA'.
@@ -280,11 +381,15 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
         }
     }
     else if (back_id == -4){
-        fprintf(stderr, "ERROR: Message recieve timeout.\n");
+        fprintf(stderr, "ERROR: Message timeout.\n");
         return 1;
     }
-    else{  //  Received other code.
+    else if (back_id >= 0){  //  Received other code.
         fprintf(stderr, "ERROR: Received message has wrong package ID.\n");
+        return 1;
+    }
+    else{  // Error while receiving the message.
+        fprintf(stderr, "ERROR: Received message is incorrect.\n");
         return 1;
     }
     return 0;
@@ -327,8 +432,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     unsigned long long sess_id = gen_sess_id();  // Generating session id.
-    printf("%llu\n", sess_id);
-    if (strcmp(protocol, "udp") == 0){  // Sending the message using UDP protocol.
+    if (strcmp(protocol, "udp") == 0 || strcmp(protocol, "udpr") == 0){  // Sending the message using UDP protocol.
+        bool udpr = false;  // Allows retransmissions.
+        if (strcmp(protocol, "udpr") == 0){
+            udpr = true;
+        }
         error = malloc(sizeof(bool));  // Catches errors.
         if (malloc_error(error) == 1){
             return 1;
@@ -355,7 +463,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "ERROR: Couldn't set timeout on the socket.\n");
         }
 
-        if (udp_conn(host, port, core, socket_fd, server_address, sess_id) == 1){
+        if (udp_conn(host, port, core, socket_fd, server_address, sess_id, udpr) == 1){
             free_msg(core);
             close(socket_fd);
             return 1;

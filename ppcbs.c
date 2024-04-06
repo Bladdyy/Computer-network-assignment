@@ -11,6 +11,9 @@
 
 #define MAX_MSG 64000
 #define MAX_WAIT 10
+#define MAX_RETRANSMITS 3
+
+
 
 // Data package components.
 typedef struct package{
@@ -25,10 +28,12 @@ typedef struct package{
 
 // Ends connection with current client.
 // Sets 'session ID', 'Bites to read' and 'last read package' to default values.
-void to_default(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last){
+void to_default(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last, bool *udpr, unsigned long long *trials){
     *sess_id = -1;
     *unpack = -1;
     *last = -1;
+    *udpr = false;
+    *trials = 0;
 }
 
 
@@ -100,17 +105,25 @@ int CONNRJT_handler(int socket_fd, package *got, struct sockaddr_in client_addre
 // Handles 'DATA' packages.
 // 'sess_id' - ID current connection with client, 'unpack' - number of bites left to recieve from all packages,
 // 'last' - ID of last received package, 'prot' - received package with information about 'msg', 'msg' - received bites.
-int DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last, package *prot,
+// TODO: free(to_send), ACC send and check other things with retransmissions in server.
+int DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last, bool *udpr, unsigned long long *trials, package *prot,
                   int socket_fd, struct sockaddr_in client_address, socklen_t address_length, void* msg){
     package *to_send = malloc(sizeof(package));
     if (malloc_error(to_send) == 1){
         return 1;
     }
     // Checks if package is next to receive and if it's session ID is correct.
-    if (*sess_id != prot->session_id || *last + 1 != prot->pack_id){
+    if (*sess_id != prot->session_id || *last + 1 < prot->pack_id || (*last + 1 != prot->pack_id && !udpr)){
         create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0);  // RJT
-        to_default(sess_id, unpack, last);  // Ends connection with client, so parameters are being set to default values.
+        to_default(sess_id, unpack, last, udpr, trials);  // Ends connection with client, so parameters are being set to default values.
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){ // Sends RJT.
+            return 1;
+        }
+    }
+    // Retransmission of ACC.
+    else if (*last >= prot->pack_id && udpr){
+        create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
+        if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
             return 1;
         }
     }
@@ -118,9 +131,13 @@ int DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsign
         write(STDOUT_FILENO, msg, prot->bit_len);   // Writing message to stdout.
         *unpack -= prot->bit_len;  // Reduces the number of bites to read in the future.
         *last = *last + 1;  // Next package ID update.
+        create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
+        if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
+            return 1;
+        }
         if (*unpack == 0){  // If whole message is read.
             create_pack(to_send, 7, prot->session_id, 0, 0, 0, 0);  // RCVD
-            to_default(sess_id, unpack, last);  // Ends connection with client, so parameters are being set to default values.
+            to_default(sess_id, unpack, last, udpr, trials);  // Ends connection with client, so parameters are being set to default values.
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends RCVD.
                 return 1;
             }
@@ -134,7 +151,7 @@ int DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsign
 // Handles 'CONN' packages.
 // 'sess_id' - ID current connection with client, 'unpack' - number of bites left to recieve from all packages,
 // 'last' - ID of last received package, 'prot' - received package with information about request to connect.
-int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, package *prot, int socket_fd, struct sockaddr_in client_address, socklen_t address_length){
+int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *udpr, package *prot, int socket_fd, struct sockaddr_in client_address, socklen_t address_length){
     package *to_send = malloc(sizeof(package));  // Answer to the request.
     if (malloc_error(to_send) == 1){
         return 1;
@@ -143,6 +160,10 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, packag
         // Creating new connection,
         *sess_id = prot->session_id;
         *unpack = prot->length;
+        if (prot->protocol == 3){
+            *udpr = true;
+        }
+        *udpr = prot->protocol;
         create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);  // CONNACT
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending assent for connection.
             fprintf(stderr, "ERROR: Couldn't connect with the client.\n");
@@ -150,17 +171,30 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, packag
         }
     }
     else{  // Server was already connected with a client.
-        create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONNRJT
-        if (send_pack(socket_fd, to_send, client_address, address_length) == 1){
-            return 1;
+        // If connected client sent another 'CONN', and there are retransmissions.
+        if (*sess_id == prot->session_id && *udpr){
+            // Resend CONACC.
+            create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);
+            if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending assent for connection.
+                fprintf(stderr, "ERROR: Couldn't connect with the client.\n");
+                return 1;
+            }
         }
-        if (*sess_id == prot->session_id){  // If connected client sent another 'CONN'.
-            fprintf(stderr, "ERROR: Connected client sent another CONN. \n");
-            return 1;
+        else{
+            create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONNRJT
+            if (send_pack(socket_fd, to_send, client_address, address_length) == 1){
+                return 1;
+            }
+            // If connected client sent another 'CONN', and there are no retransmissions.
+            if (*sess_id == prot->session_id){
+                fprintf(stderr, "ERROR: Connected client sent another CONN. \n");
+                return 1;
+            }
+            else{  // Different client wanted to connect.
+                fprintf(stderr, "ERROR: There is a client already connected.\n");
+            }
         }
-        else{  // Different client wanted to connect.
-            fprintf(stderr, "ERROR: There is a client already connected.\n");
-        }
+
     }
     return 0;
 }
@@ -171,6 +205,8 @@ int udp_server(uint16_t port, int socket_fd){
     unsigned long long sess_id = -1;  // Session ID of currently connected client.
     unsigned long long unpack = -1;  // Number of bites left to receive.
     unsigned long long last = -1;  // ID of last received package.
+    unsigned long long trials = 0;
+    bool udpr = false;
     // Bind the socket to an address.
     struct sockaddr_in server_address;
     server_address.sin_family = AF_INET;
@@ -195,69 +231,67 @@ int udp_server(uint16_t port, int socket_fd){
             if (received_length < 0) {
                 // If there is a client connected but no message has been received in 'MAX_WAIT' seconds.
                 if (errno == EAGAIN && sess_id != -1){
-                    fprintf(stderr, "ERROR: Message receive timeout.\n");
+                    if (udpr && trials < MAX_RETRANSMITS){
+                        trials++;
+                    }
+                    else{
+                        fprintf(stderr, "ERROR: Message timeout.\n");
+                        to_default(&sess_id, &unpack, &last, &udpr, &trials);
+                    }
+
                 }
                 // If there was an error receiving the message.
                 else if (errno != EAGAIN){
                     fprintf(stderr, "ERROR: Couldn't receive message.\n");
+                    to_default(&sess_id, &unpack, &last, &udpr, &trials);
                 }
-                to_default(&sess_id, &unpack, &last);
             }
             else{  // Got message.
                 package *prot = malloc(sizeof(package));  // Package information.
                 if (malloc_error(prot) == 0){
                     memcpy(prot, buff, sizeof(package));
-                    if (prot->protocol == 2){  // UDP
-                        if (prot->id == 1){  // CONN
-                            if (CONN_handler(&sess_id, &unpack, prot, socket_fd, client_address, address_length) == 1){
-                                fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                                to_default(&sess_id, &unpack, &last);
-                            }
-                        }
-                        else if (prot->id == 4 && prot->session_id == sess_id){  // DATA and correct session ID.
-                            char* msg = malloc(prot->bit_len);
-                            if (malloc_error(msg) == 0){
-                                memcpy(msg, buff + sizeof(package), prot->bit_len);
-                                if (DATA_handler(&sess_id, &unpack, &last, prot, socket_fd, client_address, address_length, msg) == 1){
-                                    fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                                    to_default(&sess_id, &unpack, &last);
-                                }
-                                free(msg);
-                            }
-                            else {
-                                to_default(&sess_id, &unpack, &last);
-                                fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                            }
-                        }
-                        else{
-                            if (sess_id != -1 && prot->session_id != sess_id){  // Bad session ID.
-                                fprintf(stderr, "ERROR: Wrong session ID.\n");
-                                CONNRJT_handler(socket_fd, prot, client_address, address_length);
-                                to_default(&sess_id, &unpack, &last);
-                            }
-                            else {  // Bad package ID.
-                                fprintf(stderr, "ERROR: Wrong package ID.\n");
-                                CONNRJT_handler(socket_fd, prot, client_address, address_length);
-                                to_default(&sess_id, &unpack, &last);
-                            }
+                    if (prot->id == 1){  // CONN
+                        if (CONN_handler(&sess_id, &unpack, &udpr, prot, socket_fd, client_address, address_length) == 1){
+                            fprintf(stderr, "ERROR: Ending connection with current client.\n");
+                            to_default(&sess_id, &unpack, &last, &udpr, &trials);
                         }
                     }
-                    else {  // NOT UDP
-                        fprintf(stderr, "ERROR: Client demanded wrong protocol.\n");
+                    else if (prot->id == 4 && prot->session_id == sess_id){  // DATA and correct session ID.
+                        char* msg = malloc(prot->bit_len);
+                        if (malloc_error(msg) == 0){
+                            memcpy(msg, buff + sizeof(package), prot->bit_len);
+                            if (DATA_handler(&sess_id, &unpack, &last, &udpr, &trials, prot, socket_fd, client_address, address_length, msg) == 1){
+                                fprintf(stderr, "ERROR: Ending connection with current client.\n");
+                                to_default(&sess_id, &unpack, &last, &udpr, &trials);
+                            }
+                            free(msg);
+                        }
+                        else {
+                            to_default(&sess_id, &unpack, &last, &udpr, &trials);
+                            fprintf(stderr, "ERROR: Ending connection with current client.\n");
+                        }
+                    }
+                    else{
+                        if (sess_id != -1 && prot->session_id != sess_id){  // Bad session ID.
+                            fprintf(stderr, "ERROR: Wrong session ID.\n");
+                        }
+                        else {  // Bad package ID.
+                            fprintf(stderr, "ERROR: Wrong package ID.\n");
+                        }
                         CONNRJT_handler(socket_fd, prot, client_address, address_length);
-                        to_default(&sess_id, &unpack, &last);
+                        to_default(&sess_id, &unpack, &last, &udpr, &trials);
                     }
                     free(prot);
                 }
                 else {
-                    to_default(&sess_id, &unpack, &last);
+                    to_default(&sess_id, &unpack, &last, &udpr, &trials);
                     fprintf(stderr, "ERROR: Ending connection with current client.\n");
                 }
             }
             free(buff);
         }
         else{
-            to_default(&sess_id, &unpack, &last);
+            to_default(&sess_id, &unpack, &last, &udpr, &trials);
             fprintf(stderr, "ERROR: Ending connection with current client.");
         }
     }
