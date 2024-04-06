@@ -101,7 +101,7 @@ int CONNRJT_handler(int socket_fd, package *got, struct sockaddr_in client_addre
 // 'sess_id' - ID current connection with client, 'unpack' - number of bites left to recieve from all packages,
 // 'last' - ID of last received package, 'prot' - received package with information about 'msg', 'msg' - received bites.
 int DATA_handler(unsigned long long *sess_id, unsigned long long *unpack, unsigned long long *last, package *prot,
-                  int socket_fd, struct sockaddr_in client_address, socklen_t address_length, void* msg){
+                 int socket_fd, struct sockaddr_in client_address, socklen_t address_length, void* msg){
     package *to_send = malloc(sizeof(package));
     if (malloc_error(to_send) == 1){
         return 1;
@@ -184,82 +184,43 @@ int udp_server(uint16_t port, int socket_fd){
     }
 
     // Handling clients.
-    for (;;) {
-        void *buff = malloc(sizeof(package) + MAX_MSG);  // Buffer.
-        if (malloc_error(buff) == 0){
-            struct sockaddr_in client_address;
-            socklen_t address_length = (socklen_t) sizeof(client_address);
-            ssize_t received_length = recvfrom(socket_fd, buff, sizeof(package) + MAX_MSG, 0,
-                                               (struct sockaddr *) &client_address, &address_length);
+    void *buff = malloc(sizeof(package) + MAX_MSG);  // Buffer.
+    if (malloc_error(buff) == 0){
+        struct sockaddr_in client_address;
+        socklen_t address_length = (socklen_t) sizeof(client_address);
+        ssize_t received_length = recvfrom(socket_fd, buff, sizeof(package) + MAX_MSG, 0,
+                                           (struct sockaddr *) &client_address, &address_length);
 
-            if (received_length < 0) {
-                // If there is a client connected but no message has been received in 'MAX_WAIT' seconds.
-                if (errno == EAGAIN && sess_id != -1){
-                    fprintf(stderr, "ERROR: Message receive timeout.\n");
-                }
+        if (received_length < 0) {
+            // If there is a client connected but no message has been received in 'MAX_WAIT' seconds.
+            if (errno == EAGAIN && sess_id != -1){
+                fprintf(stderr, "ERROR: Message timeout.\n");
+            }
                 // If there was an error receiving the message.
-                else if (errno != EAGAIN){
-                    fprintf(stderr, "ERROR: Couldn't receive message.\n");
-                }
-                to_default(&sess_id, &unpack, &last);
+            else if (errno != EAGAIN){
+                fprintf(stderr, "ERROR: Couldn't receive message.\n");
             }
-            else{  // Got message.
-                package *prot = malloc(sizeof(package));  // Package information.
-                if (malloc_error(prot) == 0){
-                    memcpy(prot, buff, sizeof(package));
-                    if (prot->protocol == 2){  // UDP
-                        if (prot->id == 1){  // CONN
-                            if (CONN_handler(&sess_id, &unpack, prot, socket_fd, client_address, address_length) == 1){
-                                fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                                to_default(&sess_id, &unpack, &last);
-                            }
-                        }
-                        else if (prot->id == 4 && prot->session_id == sess_id){  // DATA and correct session ID.
-                            char* msg = malloc(prot->bit_len);
-                            if (malloc_error(msg) == 0){
-                                memcpy(msg, buff + sizeof(package), prot->bit_len);
-                                if (DATA_handler(&sess_id, &unpack, &last, prot, socket_fd, client_address, address_length, msg) == 1){
-                                    fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                                    to_default(&sess_id, &unpack, &last);
-                                }
-                                free(msg);
-                            }
-                            else {
-                                to_default(&sess_id, &unpack, &last);
-                                fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                            }
-                        }
-                        else{
-                            if (sess_id != -1 && prot->session_id != sess_id){  // Bad session ID.
-                                fprintf(stderr, "ERROR: Wrong session ID.\n");
-                                CONNRJT_handler(socket_fd, prot, client_address, address_length);
-                                to_default(&sess_id, &unpack, &last);
-                            }
-                            else {  // Bad package ID.
-                                fprintf(stderr, "ERROR: Wrong package ID.\n");
-                                CONNRJT_handler(socket_fd, prot, client_address, address_length);
-                                to_default(&sess_id, &unpack, &last);
-                            }
-                        }
-                    }
-                    else {  // NOT UDP
-                        fprintf(stderr, "ERROR: Client demanded wrong protocol.\n");
-                        CONNRJT_handler(socket_fd, prot, client_address, address_length);
-                        to_default(&sess_id, &unpack, &last);
-                    }
-                    free(prot);
-                }
-                else {
-                    to_default(&sess_id, &unpack, &last);
-                    fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                }
-            }
-            free(buff);
-        }
-        else{
             to_default(&sess_id, &unpack, &last);
-            fprintf(stderr, "ERROR: Ending connection with current client.");
         }
+        else{  // Got message.
+            package *prot = malloc(sizeof(package));  // Package information.
+            if (malloc_error(prot) == 0) {
+                memcpy(prot, buff, sizeof(package));
+                if (prot->protocol == 2) {  // UDP
+                    if (prot->id == 1) {  // CONN
+                        if (CONN_handler(&sess_id, &unpack, prot, socket_fd, client_address, address_length) == 1) {
+                            fprintf(stderr, "ERROR: Ending connection with current client.\n");
+                            to_default(&sess_id, &unpack, &last);
+                        }
+                    }
+                }
+            }
+        }
+        free(buff);
+    }
+    else{
+        to_default(&sess_id, &unpack, &last);
+        fprintf(stderr, "ERROR: Ending connection with current client.");
     }
     return 0;
 }

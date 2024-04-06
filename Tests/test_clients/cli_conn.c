@@ -13,7 +13,6 @@
 
 // Max package size.
 #define MAX_MSG 64000
-#define MAX_WAIT 10
 
 
 // Stdin data storage.
@@ -213,22 +212,17 @@ int recv_udp_prot(int socket_fd, unsigned long long sess_id){
                                        (struct sockaddr *) &receive_address, &address_length);
     unsigned char id = back->id;
     unsigned long long sess = back->session_id ;
-    free(back);
     if (received_length < 0){  // No message received.
-        if (errno == EAGAIN){
-            fprintf(stderr, "ERROR: Message timeout.\n");
-            return -4;
-        }
-        else{
-            fprintf(stderr, "ERROR: Couldn't receive message.\n");
-            return -2;
-        }
+        fprintf(stderr, "ERROR: Couldn't receive message.\n");
+        free(back);
+        return -2;
     }
     else if (sess_id != sess) {  // Session ID of message is not equal to client session ID.
         fprintf(stderr, "ERROR: Received message has wrong session ID\n");
+        free(back);
         return -3;
     }
-
+    free(back);
     return id;
 }
 
@@ -248,45 +242,6 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
     }
     // Receive a message.
     int back_id = recv_udp_prot(socket_fd, sess_id);
-    if (back_id == 3){  // Received 'CONRJT'.
-        printf("Connection dismissed by server.\n");
-        return 0;
-    }
-    else if (back_id == 2){  // Received 'CONACC'.
-        msg_list* act = core;
-        unsigned long long pack_id = 0;
-        while (act != NULL){  // Sending 'DATA" packages.
-            package *data = malloc(sizeof(package));
-            if (malloc_error(data) == 1){
-                return 1;
-            }
-            create_pack(data, 4, sess_id, 2, 0, pack_id, act->length);
-            if (send_udp_pack(socket_fd, data, server_address, act->msg) == 1){  // Couldn't send.
-                free(data);
-                return 1;
-            }
-            free(data);
-            act = act->next;
-            pack_id++;
-        }
-        int recv = recv_udp_prot(socket_fd, sess_id);
-        if (recv == -4){
-            fprintf(stderr, "ERROR: Message recieve timeout.\n");
-            return 1;
-        }
-        else if (recv != 7){  // Waiting for 'RCVD' after sending all 'DATA'.
-            fprintf(stderr, "ERROR: Didn't get RECV\n");
-            return 1;
-        }
-    }
-    else if (back_id == -4){
-        fprintf(stderr, "ERROR: Message recieve timeout.\n");
-        return 1;
-    }
-    else{  //  Received other code.
-        fprintf(stderr, "ERROR: Received message has wrong package ID.\n");
-        return 1;
-    }
     return 0;
 }
 
@@ -345,14 +300,6 @@ int main(int argc, char *argv[]) {
         if (socket_fd < 0) {  // There was an error creating a socket.
             fprintf(stderr,"ERROR: Couldn't create a socket\n");
             return 1;
-        }
-
-        // Setting timeout on the socket.
-        struct timeval timeout;
-        timeout.tv_sec = MAX_WAIT;
-        timeout.tv_usec = 0;
-        if (setsockopt (socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout) < 0){
-            fprintf(stderr, "ERROR: Couldn't set timeout on the socket.\n");
         }
 
         if (udp_conn(host, port, core, socket_fd, server_address, sess_id) == 1){
