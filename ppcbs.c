@@ -98,7 +98,7 @@ int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udp
         return 1;
     }
     // Checks if package's ID is correct.
-    if ((*last < prot->pack_id && udpr) || (*last != prot->pack_id && !udpr)){
+    if ((*last < prot->pack_id && *udpr) || (*last != prot->pack_id && !(*udpr))){
         create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0);  // RJT
         to_default(last, udpr, trials, connected);  // Ends connection with client, so parameters are being set to default values.
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){ // Sends RJT.
@@ -106,7 +106,7 @@ int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udp
         }
     }
     // Retransmission of ACC.
-    else if (*last >= prot->pack_id && udpr){
+    else if (*last > prot->pack_id && *udpr){
         create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
             code = 2;
@@ -116,11 +116,14 @@ int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udp
         write(STDOUT_FILENO, msg, prot->bit_len);   // Writing message to stdout.
         *unpack -= prot->bit_len;  // Reduces the number of bites to read in the future.
         *last = *last + 1;  // Next package ID update.
-        if (udpr){
+
+        if (*udpr){
+            *trials = 0;
             create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
                 code = 2;
             }
+
         }
         if (*unpack == 0){  // If whole message is read.
             create_pack(to_send, 7, prot->session_id, 0, 0, 0, 0);  // RCVD
@@ -150,7 +153,6 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
         if (prot->protocol == 3){
             *udpr = true;
         }
-        *udpr = prot->protocol;
         create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);  // CONNACC
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending assent for connection.
             fprintf(stderr, "ERROR: Couldn't connect with the client.\n");
@@ -218,7 +220,7 @@ int udp_server(uint16_t port, int socket_fd){
                                                (struct sockaddr *) &client_address, &address_length);
             if (received_length < 0) {
                 // If there is udpr client connected but no message has been received in 'MAX_WAIT' seconds.
-                if (errno == EAGAIN && udpr){
+                if (udpr && errno == EAGAIN){
                     if (trials < MAX_RETRANSMITS){
                         trials++;  // Another trial.
                         package *to_send = malloc(sizeof(package));
@@ -261,11 +263,9 @@ int udp_server(uint16_t port, int socket_fd){
                 package *prot = malloc(sizeof(package));  // Package information.
                 if (malloc_error(prot) == 0){
                     memcpy(prot, buff, sizeof(package));
-                    if (udpr && sess_id == prot->session_id){  // Received message from connected UDPR user.
-                        trials = 0;
-                    }
                     if (prot->id == 1){  // CONN
                         int conn = CONN_handler(&sess_id, &unpack, &udpr, prot, socket_fd, client_address, address_length, &connected);
+
                         if (conn == 1){  // CONN error.
                             fprintf(stderr, "ERROR: Ending connection with current client.\n");
                             to_default(&last, &udpr, &trials, &connected);

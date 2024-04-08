@@ -249,7 +249,7 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
     unsigned long long sess = back->session_id;
     unsigned long long pack = back->pack_id;
     free(back);
-
+    printf("%d id\n", id);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
             return -4;
@@ -288,8 +288,9 @@ int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_i
         }
         // Tries to receive ACC again.
         back_id = recv_ACC(socket_fd, sess_id, pack_id);
+        printf("ACC %d\n", back_id);
     }
-
+    printf("ACC %d\n", back_id);
     if (back_id == -4){  // Too many timeouts.
         fprintf(stderr, "ERROR: Too many message timeouts.\n");
         return 1;
@@ -314,12 +315,18 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
     if (malloc_error(conn) == 1){
         return 1;
     }
-    create_pack(conn, 1, sess_id, 2, get_length(core), 0, 0);  // CONN
+    if (udpr){
+        create_pack(conn, 1, sess_id, 3, get_length(core), 0, 0);  // CONN
+    }
+    else{
+        create_pack(conn, 1, sess_id, 2, get_length(core), 0, 0);  // CONN
+    }
 
     // Sending 'CONN' package.
     if (send_udp_pack(socket_fd, conn, server_address, NULL) == 1) {
         return 1;
     }
+
     // Receive a message.
     unsigned long long trial = 0;
     int back_id = recv_udp_prot(socket_fd, sess_id);
@@ -330,9 +337,10 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
             return 1;
         }
         back_id = recv_udp_prot(socket_fd, sess_id);
+        printf("CONN %d\n", back_id);
         trial++;
     }
-
+    printf("CONN %d\n", back_id);
     if (back_id == 3){  // Received 'CONRJT'.
         printf("Connection dismissed by server.\n");
         return 0;
@@ -352,7 +360,6 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
                 free(data);
                 return 1;
             }
-
             // Retransmissions.
             if (udpr && get_ACC(socket_fd, sess_id, pack_id, data, server_address, act->msg) == 1){
                 free(data);
@@ -362,11 +369,12 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
             act = act->next;  // Next part of message.
             pack_id++;
         }
-
+        printf("GET IN HERE\n");
         int recv;
         do{
             recv = recv_ACC(socket_fd, sess_id, pack_id);
-        } while (recv == 2);  // Receiving past accepts.
+            printf("recv %d\n", recv);
+        } while (recv == 2 && udpr);  // Receiving past accepts.
 
         if (recv == -4){
             fprintf(stderr, "ERROR: Message timeout.\n");
