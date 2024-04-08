@@ -252,11 +252,9 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
 
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
-            fprintf(stderr, "ERROR: Message timeout.\n");
             return -4;
         }
         else{
-            fprintf(stderr, "ERROR: Couldn't receive message.\n");
             return -2;
         }
     }
@@ -269,7 +267,6 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
             return 2;
         }
         else{  // Incorrect ACC.
-            fprintf(stderr, "ERROR: Incorrect message received.\n");
             return -1;
         }
     }
@@ -301,7 +298,7 @@ int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_i
         fprintf(stderr, "ERROR: Received message is incorrect.\n");
         return 1;
     }
-    else if (back_id != 5){  // Correct package, but not ACC or past accept.
+    else if (back_id != 5){  // Correct package, but not ACC.
         fprintf(stderr, "ERROR: Received message has wrong package ID.\n");
         return 1;
     }
