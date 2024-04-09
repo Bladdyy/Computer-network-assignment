@@ -1,29 +1,13 @@
 #include <sys/socket.h>
 #include <errno.h>
-#include <inttypes.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
-
-#define MAX_MSG 64000
-#define MAX_WAIT 10
-#define MAX_RETRANSMITS 3
-
-
-
-// Data package components.
-typedef struct package{
-    unsigned char id;
-    unsigned long long session_id;
-    unsigned char protocol;
-    unsigned long long length;
-    unsigned long long pack_id;
-    unsigned long int bit_len;
-} package;
+#include "common.h"
+#include "protconst.h"
 
 
 // Ends connection with current client.
@@ -33,39 +17,6 @@ void to_default(unsigned long long *last, bool *udpr, unsigned long long *trials
     *udpr = false;
     *connected = false;
     *trials = 0;
-}
-
-
-// Creates pack with given data.
-void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len){
-    pack->id = id;
-    pack->session_id = sess_id;
-    pack->protocol = prot;
-    pack->length = len;
-    pack->pack_id = pack_id;
-    pack->bit_len = bit_len;
-}
-
-
-// Checks if malloc allocated spacer on 'pointer'.
-int malloc_error(void* pointer){
-    if (pointer == NULL){  // If there was a problem allocating space.
-        fprintf(stderr, "ERROR: Problem with allocation.\n");
-        return 1;
-    }
-    return 0;
-}
-
-
-// Creates port.
-static uint16_t read_port(char const *string, bool *error) {
-    char *endptr;
-    unsigned long port = strtoul(string, &endptr, 10);
-    if ((port == ULONG_MAX && errno == ERANGE) || *endptr != 0 || port == 0 || port > UINT16_MAX) {
-        fprintf(stderr,"ERROR: %s is not a valid port number.\n", string);
-        *error = true;
-    }
-    return (uint16_t) port;
 }
 
 
@@ -92,7 +43,6 @@ int send_pack(int socket_fd, package *to_send, struct sockaddr_in client_address
 // ACC send and check other things with retransmissions in server.
 int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udpr, bool *connected, unsigned long long *trials, package *prot,
                   int socket_fd, struct sockaddr_in client_address, socklen_t address_length, void* msg){
-    int code = 0;
     package *to_send = malloc(sizeof(package));
     if (malloc_error(to_send) == 1){
         return 1;
@@ -102,39 +52,43 @@ int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udp
         create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0);  // RJT
         to_default(last, udpr, trials, connected);  // Ends connection with client, so parameters are being set to default values.
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){ // Sends RJT.
-            code = 1;
+            fprintf(stderr, "ERROR: Couldn't receive next part of message.\n");
         }
     }
     // Retransmission of ACC.
     else if (*last > prot->pack_id && *udpr){
         create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
-            code = 2;
+            fprintf(stderr, "ERROR: Couldn't send ACC\n");
         }
     }
     else{  // Protocol is correct.
-        write(STDOUT_FILENO, msg, prot->bit_len);   // Writing message to stdout.
+        if (write(STDOUT_FILENO, msg, prot->bit_len) < 0){   // Writing message to stdout.
+            to_default(last, udpr, trials, connected);
+            free(to_send);
+            fprintf(stderr, "ERROR: Couldn't write message. Disconnecting client.\n");
+            return 1;
+        }
         *unpack -= prot->bit_len;  // Reduces the number of bites to read in the future.
         *last = *last + 1;  // Next package ID update.
 
-        if (*udpr){
+        if (*udpr){  // Sending ACC.
             *trials = 0;
             create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
-                code = 2;
+                fprintf(stderr, "ERROR: Couldn't send ACC\n");
             }
-
         }
         if (*unpack == 0){  // If whole message is read.
             create_pack(to_send, 7, prot->session_id, 0, 0, 0, 0);  // RCVD
             to_default(last, udpr, trials, connected);  // Ends connection with client, so parameters are being set to default values.
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends RCVD.
-                code = 3;
+                fprintf(stderr, "ERROR: Couldn't send RECV\n");
             }
         }
     }
     free(to_send);
-    return code;
+    return 0;
 }
 
 
@@ -228,7 +182,7 @@ int udp_server(uint16_t port, int socket_fd){
                             // Resending ACC.
                             create_pack(to_send, 5, sess_id, 0, 0, last - 1, 0);
                             if (send_pack(socket_fd, to_send, client, sizeof(client))){
-                                return 1;
+                                fprintf(stderr, "ERROR: Couldn't resend ACC.\n");
                             }
                         }
                         // No data received yet.
@@ -236,7 +190,7 @@ int udp_server(uint16_t port, int socket_fd){
                             // Resending CONACC.
                             create_pack(to_send, 2, sess_id, 0, 0, 0, 0);
                             if (send_pack(socket_fd, to_send, client, sizeof(client))){
-                                return 1;
+                                fprintf(stderr, "ERROR: Couldn't resend CONNACC.\n");
                             }
                         }
                     }
@@ -279,22 +233,7 @@ int udp_server(uint16_t port, int socket_fd){
                         char* msg = malloc(prot->bit_len);
                         if (malloc_error(msg) == 0){
                             memcpy(msg, buff + sizeof(package), prot->bit_len);
-                            int data_code = DATA_handler(&unpack, &last, &udpr, &connected, &trials, prot, socket_fd, client_address, address_length, msg);
-                            if (data_code != 0){
-                                if (!udpr){
-                                    fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                                    to_default(&last, &udpr, &trials, &connected);
-                                }
-                                else if (data_code == 1){
-                                    fprintf(stderr, "ERROR: Couldn't receive next part of message.\n");
-                                }
-                                else if (data_code == 2){
-                                    fprintf(stderr, "ERROR: Couldn't send ACC\n");
-                                }
-                                else{
-                                    fprintf(stderr, "ERROR: Couldn't send RECV\n");
-                                }
-                            }
+                            DATA_handler(&unpack, &last, &udpr, &connected, &trials, prot, socket_fd, client_address, address_length, msg);
                             free(msg);
                         }
                         else {

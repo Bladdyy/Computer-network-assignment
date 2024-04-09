@@ -1,20 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <limits.h>
-#include <errno.h>
-#include <inttypes.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <stdbool.h>
+#include <unistd.h>
 #include <time.h>
-
-
-// Max package size.
-#define MAX_MSG 64000
-#define MAX_WAIT 10
-#define MAX_RETRANSMITS 3
+#include "common.h"
+#include "protconst.h"
 
 
 // Stdin data storage.
@@ -23,39 +12,6 @@ typedef struct msg_list{
     struct msg_list *next;
     unsigned int length;
 } msg_list;
-
-
-// Data package components.
-typedef struct package{
-    unsigned char id;
-    unsigned long long session_id;
-    unsigned char protocol;
-    unsigned long long length;
-    unsigned long long pack_id;
-    unsigned long int bit_len;
-} package;
-
-
-// Creates pack with given data.
-void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len){
-    pack->id = id;
-    pack->session_id = sess_id;
-    pack->protocol = prot;
-    pack->length = len;
-    pack->pack_id = pack_id;
-    pack->bit_len = bit_len;
-}
-
-
-// Gets length of the data in 'msg_list'.
-unsigned long long get_length(msg_list *core){
-    unsigned long long len = 0;
-    while (core != NULL){
-        len += core->length;
-        core = core->next;
-    }
-    return len;
-}
 
 
 // Generates random session ID.
@@ -69,6 +25,20 @@ unsigned long long gen_sess_id(){
 }
 
 
+// Gets length of the data in 'msg_list'.
+unsigned long long get_length(msg_list *core){
+    unsigned long long len = 0;
+    int index = 0;
+    while (core != NULL){
+        len += core->length;
+        core = core->next;
+        printf("%d %llu\n",index,  len);
+        index++;
+    }
+    return len;
+}
+
+
 // Frees 'msg_list' structure.
 void free_msg(msg_list* core){
     msg_list *prev;
@@ -78,28 +48,6 @@ void free_msg(msg_list* core){
         core = core->next;
         free(prev);
     } while (core != NULL);
-}
-
-
-// Checks if malloc allocated spacer on 'pointer'.
-int malloc_error(void* pointer){
-    if (pointer == NULL){  // If there was a problem allocating space.
-        fprintf(stderr, "ERROR: Problem with allocation.\n");
-        return 1;
-    }
-    return 0;
-}
-
-
-// Gets port number.
-static uint16_t read_port(char const *string, bool *error) {
-    char* end_ptr;
-    unsigned long port = strtoul(string, &end_ptr, 10);
-    if ((port == ULONG_MAX && errno == ERANGE) || *end_ptr != 0 || port == 0 || port > UINT16_MAX) {
-        fprintf(stderr,"ERROR: %s is not a valid port number.\n", string);
-        *error = true;
-    }
-    return (uint16_t) port;
 }
 
 
@@ -147,19 +95,20 @@ int get_stdin(msg_list* core){
     while (res > 0){  // As long as any character has been read, and it's not 'EOF'.
         (act->msg)[length] = el;  // Saving character in the buffer.
         length++;
-        if (length == MAX_MSG - 1) {  // If current buffer is full.
+        if (length == MAX_MSG) {  // If current buffer is full.
             // Allocating new buffer.
             act->next = malloc(sizeof(msg_list));
             if (malloc_error(act->next) == 1){
                 return 1;
             }
+            act->length = length;
             act = act->next;
             act->next = NULL;
+
             act->msg = malloc(sizeof(char) * MAX_MSG);
-            if (malloc_error(act->next) == 1){
+            if (malloc_error(act->msg) == 1){
                 return 1;
             }
-            act->length = length;
             length = 0;
         }
         res = (int) read(STDIN_FILENO, &el, 1);
@@ -249,7 +198,6 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
     unsigned long long sess = back->session_id;
     unsigned long long pack = back->pack_id;
     free(back);
-    printf("%d id\n", id);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
             return -4;
@@ -288,9 +236,7 @@ int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_i
         }
         // Tries to receive ACC again.
         back_id = recv_ACC(socket_fd, sess_id, pack_id);
-        printf("ACC %d\n", back_id);
     }
-    printf("ACC %d\n", back_id);
     if (back_id == -4){  // Too many timeouts.
         fprintf(stderr, "ERROR: Too many message timeouts.\n");
         return 1;
@@ -309,7 +255,7 @@ int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_i
 
 
 // Sends packages of data to server using UDP protocol.
-int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id, bool udpr){
+int udp_conn(msg_list* core, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id, bool udpr){
     // Creating 'CONN' package.
     package *conn = malloc(sizeof(package));
     if (malloc_error(conn) == 1){
@@ -337,12 +283,9 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
             return 1;
         }
         back_id = recv_udp_prot(socket_fd, sess_id);
-        printf("CONN %d\n", back_id);
         trial++;
     }
-    printf("CONN %d\n", back_id);
     if (back_id == 3){  // Received 'CONRJT'.
-        printf("Connection dismissed by server.\n");
         return 0;
     }
     else if (back_id == 2){  // Received 'CONACC'.
@@ -360,6 +303,7 @@ int udp_conn(char const *host, uint16_t port, msg_list* core, int socket_fd, str
                 free(data);
                 return 1;
             }
+            printf("sent: %llu\n", data->pack_id);
             // Retransmissions.
             if (udpr && get_ACC(socket_fd, sess_id, pack_id, data, server_address, act->msg) == 1){
                 free(data);
@@ -428,6 +372,7 @@ int main(int argc, char *argv[]) {
     if (malloc_error(core) == 1){
         return 1;
     }
+
     if (get_stdin(core) == 1){  // Reading the message from stdin.
         free_msg(core);
         return 1;
@@ -468,7 +413,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "ERROR: Couldn't set timeout on the socket.\n");
         }
 
-        if (udp_conn(host, port, core, socket_fd, server_address, sess_id, udpr) == 1){
+        if (udp_conn(core, socket_fd, server_address, sess_id, udpr) == 1){
             free_msg(core);
             close(socket_fd);
             return 1;
