@@ -59,20 +59,21 @@ int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_addres
     int code = 0;  // Return code.
     void* buffer;
     if (msg == NULL){  // No message, only package.
-        buffer = malloc(sizeof(package) + pack->bit_len);  // Buffer with package and message.
+        buffer = malloc(sizeof(package));  // Buffer with package and message.
     }
     else{
-        buffer = malloc(sizeof(package));
+        buffer = malloc(sizeof(package) + pack->bit_len);
     }
     if (malloc_error(buffer) == 1){
         return -1;
     }
+
     memcpy(buffer, pack, sizeof(package));
+
     // Sending some part of message.
     if (msg != NULL){
         memcpy(buffer + sizeof(package), msg + MAX_MSG * pack->pack_id, pack->bit_len);
     }
-
     // Sending buffer to server.
     ssize_t sent_length = sendto(socket_fd, buffer, sizeof(package) + pack->bit_len, 0,
                                  (struct sockaddr *) &server_address, sizeof(server_address));
@@ -207,13 +208,13 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
 
     // Sending 'CONN' package.
     if (send_udp_pack(socket_fd, conn, server_address, NULL) == 1) {
+        free(conn);
         return 1;
     }
-
+    free(conn);
     // Receive a message.
     unsigned long long trial = 0;
     int back_id = recv_udp_prot(socket_fd, sess_id);
-
     // Retransmissions.
     while (back_id == -4 && udpr && trial < MAX_RETRANSMITS){
         if (send_udp_pack(socket_fd, conn, server_address, NULL) == 1) {
@@ -246,6 +247,7 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
             len -= data->bit_len;
             free(data);
             pack_id++;
+
         }
         int recv;
         do{

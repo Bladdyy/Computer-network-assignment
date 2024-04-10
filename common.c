@@ -3,6 +3,7 @@
 
 // Creates pack with given data.
 void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len){
+    pack = memset(pack, 0, sizeof(package));  // Initializing  memory.
     pack->id = id;
     pack->session_id = sess_id;
     pack->protocol = prot;
