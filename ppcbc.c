@@ -279,6 +279,77 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
 }
 
 
+ssize_t tcp_write(int socket_fd, package *data, char* msg){
+    ssize_t to_write = sizeof(package);
+    ssize_t written = 0;
+    ssize_t done;
+    while (to_write > 0){
+        done = write(socket_fd, data + written, to_write);
+        if (done <= 0){
+            return -1;
+        }
+        written += done;
+        to_write -= done;
+    }
+    if (msg != NULL){
+        to_write = (ssize_t) data->bit_len;
+        written = 0;
+        while (to_write > 0){
+            done = write(socket_fd, msg + written, to_write);
+            if (done <= 0){
+                return -1;
+            }
+            written += done;
+            to_write -= done;
+        }
+    }
+    return 0;
+}
+
+
+int tcp_read_prot(int socket_fd, unsigned long long sess_id){
+    package *pack = malloc(sizeof(package));
+    if (malloc_error(pack) == -1){
+        return -1;
+    }
+    ssize_t to_read = sizeof(package);
+    ssize_t all_read = 0;
+    ssize_t done;
+    while (to_read > 0){
+        done = read(socket_fd, pack + all_read, to_read);
+        if (done < 0){
+            fprintf(stderr, "ERROR: Couldn't read message.\n");
+            return -1;
+        }
+        all_read += done;
+        to_read -= done;
+    }
+    if (sess_id != pack->session_id) {
+        fprintf(stderr, "ERROR: Message with wrong session ID\n");
+        return -1;
+    }
+    return 0;
+}
+
+int tcp_conn(char *msg, unsigned long long len, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id){
+    package *conn = malloc(sizeof(package));
+    if (malloc_error(conn) == 1){
+        return 1;
+    }
+    create_pack(conn, 1, sess_id, 3, len, 0, 0);
+    if (tcp_write(socket_fd, conn, NULL) == -1){
+        fprintf(stderr, "ERROR: Couldn't send message.\n");
+    }
+    int read = tcp_read_prot(socket_fd, sess_id);
+    if (read == -1){
+        return 1;
+    }
+    return 0;
+}
+
+
+
+
 // Reads stdin data. If successful sends data to server using established protocol.
 // Function demands 3 arguments, communication protocol, server id and port id.
 int main(int argc, char *argv[]) {
@@ -304,13 +375,13 @@ int main(int argc, char *argv[]) {
     char* msg = NULL;
     size_t size = 0;
     // Tries to read message.
-    unsigned long long len = getline(&msg, &size, stdin);
-    if (errno == ENOMEM) {
+    long long code = getline(&msg, &size, stdin);
+    if (code == -1) {
         free(msg);
         fprintf(stderr, "Couldn't read message.\n");
         return 1;
     }
-    if (len == 0){
+    if (code == 0){
         free(msg);
         fprintf(stderr, "Empty message won't be send.\n");
         return 1;
@@ -348,9 +419,52 @@ int main(int argc, char *argv[]) {
         timeout.tv_usec = 0;
         if (setsockopt (socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout) < 0){
             fprintf(stderr, "ERROR: Couldn't set timeout on the socket.\n");
+            return 1;
         }
 
-        if (udp_conn(msg, len, socket_fd, server_address, sess_id, udpr) == 1){
+        if (udp_conn(msg, code, socket_fd, server_address, sess_id, udpr) == 1){
+            free(msg);
+            close(socket_fd);
+            return 1;
+        }
+        close(socket_fd);
+    }
+    else if (strcmp(protocol, "tcp") == 0){
+        error = malloc(sizeof(bool));  // Catches errors.
+        if (malloc_error(error) == 1){
+            free(msg);
+            return 1;
+        }
+        *error = false;
+        struct sockaddr_in server_address = get_server_address(host, port, error, AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (*error){  // There was an error getting server address.
+            free(error);
+            free(msg);
+            return 1;
+        }
+        free(error);
+
+        int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (socket_fd < 0) {  // There was an error creating a socket.
+            fprintf(stderr,"ERROR: Couldn't create a socket\n");
+            free(msg);
+            return 1;
+        }
+
+        // Setting timeout on the socket.
+        struct timeval timeout;
+        timeout.tv_sec = MAX_WAIT;
+        timeout.tv_usec = 0;
+        if (setsockopt (socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout) < 0){
+            fprintf(stderr, "ERROR: Couldn't set timeout on the socket.\n");
+            return 1;
+        }
+        if (connect(socket_fd, (struct sockaddr *) &server_address, (socklen_t) sizeof(server_address)) < 0) {
+            fprintf(stderr, "ERROR: Couldn't connect to the server.");
+            return 1;
+        }
+
+        if (tcp_conn(msg, code, socket_fd, server_address, sess_id) == 1){
             free(msg);
             close(socket_fd);
             return 1;
