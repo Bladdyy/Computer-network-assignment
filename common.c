@@ -57,9 +57,12 @@ int tcp_read(int socket_fd, void* data, unsigned long int size){
     ssize_t done;
     while (to_read > 0){
         done = read(socket_fd, data + all_read, to_read);
-        if (done < 0){
+        if (done <= 0){
             if (errno == EAGAIN){
                 fprintf(stderr, "ERROR: Message timeout.\n");
+            }
+            else if (done == 0){
+                fprintf(stderr, "ERROR: Client already closed the socket.\n");
             }
             else{
                 fprintf(stderr, "ERROR: Couldn't read message.\n");

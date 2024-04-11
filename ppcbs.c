@@ -294,7 +294,7 @@ int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *s
     free(pack);
     if (demanded == id){
         if (demanded == 1){
-            if (prot != 1){
+            if (prot != 3){
                 fprintf(stderr, "ERROR: Wrong protocol.\n");
             }
             else{

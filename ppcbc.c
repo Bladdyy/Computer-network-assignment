@@ -331,6 +331,7 @@ int tcp_conn(char *msg, unsigned long long len, int socket_fd, unsigned long lon
             return 1;
         }
         len -= data->byte_len;
+        pack_id++;
     }
     free(data);
 
@@ -443,7 +444,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "ERROR: Couldn't connect to the server.");
             return 1;
         }
-
         if (tcp_conn(msg, code, socket_fd, sess_id) == 1){
             free(msg);
             close(socket_fd);
