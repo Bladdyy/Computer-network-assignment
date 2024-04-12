@@ -35,13 +35,14 @@ uint16_t read_port(char const *string, bool *error) {
 }
 
 
+// Sends messages using TCP protocol.
 int tcp_write(int socket_fd, void *data, unsigned long int size){
-    unsigned long int to_write = size;
-    unsigned long int written = 0;
+    unsigned long int to_write = size;  // Size to write.
+    unsigned long int written = 0;      // Already sent bytes.
     ssize_t done;
     while (to_write > 0){
         done = write(socket_fd, data + written, to_write);
-        if (done <= 0){
+        if (done <= 0){  // Error while sending.
             return 1;
         }
         written += done;
@@ -51,13 +52,14 @@ int tcp_write(int socket_fd, void *data, unsigned long int size){
 }
 
 
+// Receives messages using TCP protocol.
 int tcp_read(int socket_fd, void* data, unsigned long int size){
-    unsigned long int to_read = size;
-    unsigned long int all_read = 0;
+    unsigned long int to_read = size;  // Size to read.
+    unsigned long int all_read = 0;    // Already read bytes.
     ssize_t done;
     while (to_read > 0){
         done = read(socket_fd, data + all_read, to_read);
-        if (done <= 0){
+        if (done <= 0){  // Error while reading.
             if (errno == EAGAIN){
                 fprintf(stderr, "ERROR: Message timeout.\n");
             }

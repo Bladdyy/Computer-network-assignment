@@ -142,7 +142,7 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
 }
 
 
-//  UDP server work.
+//  UDP server lifetime.
 int udp_server(int socket_fd){
     unsigned long long sess_id = 0;  // Session ID of currently connected client.
     unsigned long long unpack = 0;  // Number of bites left to receive.
@@ -248,6 +248,7 @@ int udp_server(int socket_fd){
 }
 
 
+// Disconnecting currently connected user from the server.
 void tcp_disconnect(bool *connected, bool *conacc, unsigned long long *pack_id, int socket_fd){
     *connected = false;
     *conacc = false;
@@ -256,35 +257,39 @@ void tcp_disconnect(bool *connected, bool *conacc, unsigned long long *pack_id, 
 }
 
 
+// Reads data.
 int tcp_data(int socket_fd, unsigned long int len, unsigned long long *size){
     char* buffer = malloc(len);
     if (malloc_error(buffer) == 1){
         return 1;
     }
-    if (tcp_read(socket_fd, buffer, len) == 1){
+    if (tcp_read(socket_fd, buffer, len) == 1){  // Gets data to write.
         free(buffer);
         return 1;
     }
-    if (write(STDOUT_FILENO, buffer, len) < 0){
+    if (write(STDOUT_FILENO, buffer, len) < 0){  // Writes data on stdout.
         free(buffer);
         fprintf(stderr, "ERROR: Couldn't write received message.\n");
         return 1;
     }
-    *size -= len;
+    *size -= len;  // Lessens size of data to read.
     free(buffer);
     return 0;
 }
 
 
+// Handles getting new packages. Size is a pointer to size left of message.
+// Demanded is the ID of package that server wants to recieve. Pack_id is the id of next package with data to recieve.
 int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *size, int demanded, unsigned long long pack_id){
     package *pack = malloc(sizeof(package));
     if (malloc_error(pack) == -1){
         return 1;
     }
-    if (tcp_read(socket_fd, pack, sizeof(package)) == 1){
+    if (tcp_read(socket_fd, pack, sizeof(package)) == 1){  // Reads new package information.
         free(pack);
         return 1;
     }
+    // Saves information.
     unsigned char id = pack->id;
     unsigned long long session = pack->session_id;
     unsigned long long current = pack->pack_id;
@@ -292,32 +297,33 @@ int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *s
     unsigned char prot = pack->protocol;
     unsigned long int byte_len = pack->byte_len;
     free(pack);
-    if (demanded == id){
-        if (demanded == 1){
-            if (prot != 3){
+
+    if (demanded == id){  // ID of received package matches demanded ID.
+        if (demanded == 1){  // CONN.
+            if (prot != 3){  // Not TCP.
                 fprintf(stderr, "ERROR: Wrong protocol.\n");
             }
-            else{
+            else{  // Connected new user succesfully.
                 *sess_id = session;
                 *size = length;
             }
         }
-        else if (*sess_id == session && pack_id == current){  // DATA
-            if (tcp_data(socket_fd, byte_len, size) == 1){
+        else if (*sess_id == session && pack_id == current){  // DATA.
+            if (tcp_data(socket_fd, byte_len, size) == 1){  // Handles newly received data.
                 return 1;
             }
             return 0;
         }
-        else{
-            if (*sess_id != session){
+        else{  // DATA but with wrong parameters.
+            if (*sess_id != session){  // Incorrect session ID.
                 fprintf(stderr, "ERROR: Wrong session id.\n");
             }
-            else{
+            else{  // Incorrect pack ID.
                 fprintf(stderr, "ERROR: Wrong data id.\n");
             }
             package *send_to = malloc(sizeof(package));
             if (malloc_error(send_to) == 0){
-                create_pack(send_to, 6, *sess_id, 0, 0, pack_id, 0);
+                create_pack(send_to, 6, *sess_id, 0, 0, pack_id, 0);  // RJT.
                 if (tcp_write(socket_fd, send_to, sizeof(package)) == 1){
                     fprintf(stderr, "ERROR: Couldn't send RJT.\n");
                 }
@@ -326,7 +332,7 @@ int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *s
             return 1;
         }
     }
-    else{
+    else{  // ID doesn't match demanded ID.
         fprintf(stderr, "ERROR: Wrong package id.\n");
         return 1;
     }
@@ -335,13 +341,15 @@ int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *s
 }
 
 
+
+// TCP server lifetime.
 int tcp_server(int socket_fd){
-    bool connected = false;
-    bool conacc = false;
-    int client_fd;
-    unsigned long long size;
-    unsigned long long sess_id;
-    unsigned long long pack_id = 0;
+    bool connected = false;          // Connected to any user.
+    bool conacc = false;             // Accepted connection from connected user.
+    int client_fd;                   // Connected user's socket.
+    unsigned long long size;         // Size of client's message.
+    unsigned long long sess_id;      // Client's session ID.
+    unsigned long long pack_id = 0;  // ID of next package.
     for (;;){
         if (!connected){  // Connecting with the new client.
             struct sockaddr_in client_address;
@@ -362,13 +370,13 @@ int tcp_server(int socket_fd){
                 }
             }
         }
-        else{
-            if (!conacc){
-                int read = tcp_handle(client_fd, &sess_id, &size, 1, 0);
-                if (read == 1){  // Message receive problem.
+        else{  // User connected to server.
+            if (!conacc){  // User not permitted to send yet.
+                int receive = tcp_handle(client_fd, &sess_id, &size, 1, 0);  // Receive CONN.
+                if (receive == 1){  // Message receive problem.
                     tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
                 }
-                else{
+                else{  // CONN received.
                     package *to_send = malloc(sizeof(package));
                     if (malloc_error(to_send) == 1){
                         tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
@@ -376,7 +384,7 @@ int tcp_server(int socket_fd){
                     else{
                         conacc = true;
                         create_pack(to_send, 2, sess_id, 0, 0, 0, 0);
-                        if (tcp_write(client_fd, to_send, sizeof(package)) == 1){
+                        if (tcp_write(client_fd, to_send, sizeof(package)) == 1){  // Send CONACC.
                             tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
                             fprintf(stderr, "ERROR: Couldn't send CONACC\n");
                         }
@@ -384,18 +392,18 @@ int tcp_server(int socket_fd){
                     }
                 }
             }
-            else{
-                int read = tcp_handle(client_fd, &sess_id, &size, 4, pack_id);
+            else{  // User permitted to send.
+                int read = tcp_handle(client_fd, &sess_id, &size, 4, pack_id);  // Receive new data.
                 if (read == 1) {  // Message receive problem.
                     tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
                 }
-                else{
+                else{  // Message got.
                     pack_id++;
-                    if (size == 0){
+                    if (size == 0){  // If whole message was read.
                         package *to_send = malloc(sizeof(package));
                         if (malloc_error(to_send) == 0){
-                            create_pack(to_send, 7, sess_id, 0, 0, 0, 0);
-                            int write = tcp_write(client_fd, to_send, sizeof(package));
+                            create_pack(to_send, 7, sess_id, 0, 0, 0, 0);   // RCVD.
+                            int write = tcp_write(client_fd, to_send, sizeof(package));  // Send RCVD.
                             free(to_send);
                             if (write == 1){
                                 fprintf(stderr, "ERROR: Couldn't send recv\n");
@@ -430,13 +438,15 @@ int main(int argc, char *argv[]) {
     }
     free(error);
 
-    int sock;
-    if (strcmp(protocol, "udp") == 0){
+    int sock;  // Setting for the socket.
+    if (strcmp(protocol, "udp") == 0){  // UDP/UDPr
         sock = SOCK_DGRAM;
     }
-    else{
+    else{  // TCP
         sock = SOCK_STREAM;
     }
+
+    // Create socket.
     int socket_fd = socket(AF_INET, sock, 0);
     if (socket_fd < 0) {  // There was an error creating a socket.
         fprintf(stderr,"ERROR: Couldn't create a socket\n");
@@ -449,13 +459,14 @@ int main(int argc, char *argv[]) {
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
     server_address.sin_port = htons(port);
 
-    // There was an error binding.
+    // Binding.
     if (bind(socket_fd, (struct sockaddr *) &server_address, (socklen_t) sizeof(server_address)) < 0) {
         fprintf(stderr, "ERROR: Couldn't bind the socket.\n");
         return 1;
     }
 
     if (strcmp(protocol, "udp") == 0){  // Communication protocol is UDP.
+
         // Setting timeout on the socket.
         struct timeval timeout;
         timeout.tv_sec = MAX_WAIT;
@@ -464,6 +475,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "ERROR: Couldn't set timeout on the socket.\n");
         }
 
+        // Setting up UDP server.
         if (udp_server(socket_fd) == 1){
             close(socket_fd);
             return 1;
@@ -471,6 +483,7 @@ int main(int argc, char *argv[]) {
         close(socket_fd);
     }
     else if (strcmp(protocol, "tcp") == 0){
+        // Listening.
         if (listen(socket_fd, MAX_QUEUE) < 0){
             fprintf(stderr, "ERROR: Couldn't listen.\n");
             return 1;
@@ -479,13 +492,15 @@ int main(int argc, char *argv[]) {
         if (getsockname(socket_fd, (struct sockaddr*) &server_address, &length) < 0){
             fprintf(stderr, "ERROR: Couldn't find the port to listen on.\n");
         }
+
+        // Setting up TCP server.
         if (tcp_server(socket_fd) == 1){
             close(socket_fd);
             return 1;
         }
         close(socket_fd);
     }
-    else{
+    else{  // Wrong protocol.
         fprintf(stderr, "ERROR: Wrong protocol.\n");
         return 1;
     }

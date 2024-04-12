@@ -11,7 +11,6 @@ all: $(TARGET1) $(TARGET2)
 $(TARGET1): $(TARGET1).o common.o
 $(TARGET2): $(TARGET2).o common.o
 
-# To są zależności wygenerowane automatycznie za pomocą polecenia `gcc -MM *.c`.
 ppcbc.o: ppcbc.c protconst.h
 ppcbs.o: ppcbs.c protconst.h
 common.o: common.c
