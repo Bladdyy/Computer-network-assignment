@@ -66,21 +66,22 @@ int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_addres
     else{
         buffer = malloc(sizeof(package) + pack->byte_len);
     }
+
     if (malloc_error(buffer) == 1){
         return -1;
     }
-
     memcpy(buffer, pack, sizeof(package));
 
     // Sending some part of message.
     if (msg != NULL){
         memcpy(buffer + sizeof(package), msg + MAX_MSG * pack->pack_id, pack->byte_len);
     }
+
     // Sending buffer to server.
     ssize_t sent_length = sendto(socket_fd, buffer, sizeof(package) + pack->byte_len, 0,
                                  (struct sockaddr *) &server_address, sizeof(server_address));
+
     if (sent_length < 0) {  // Couldn't send.
-        fprintf(stderr, "ERROR: Couldn't send Package with id %d.\n", pack->id);
         code = 1;
     }
     else if ((size_t) sent_length != sizeof(package) + pack->byte_len) {  // Couldn't send fully
@@ -106,7 +107,6 @@ int recv_udp_prot(int socket_fd, unsigned long long sess_id){
     free(back);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
-            fprintf(stderr, "ERROR: Message timeout.\n");
             return -4;
         }
         else{  // Error while reading message.
@@ -211,18 +211,19 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
         free(conn);
         return 1;
     }
-    free(conn);
     // Receive a message.
     unsigned long long trial = 0;
     int back_id = recv_udp_prot(socket_fd, sess_id);
     // Retransmissions.
     while (back_id == -4 && udpr && trial < MAX_RETRANSMITS){
         if (send_udp_pack(socket_fd, conn, server_address, NULL) == 1) {
+            free(conn);
             return 1;
         }
         back_id = recv_udp_prot(socket_fd, sess_id);
         trial++;
     }
+    free(conn);
     if (back_id == 3){  // Received 'CONRJT'.
         fprintf(stderr, "ERROR: Couldn't connect with the server.\n");
         return 1;
@@ -265,6 +266,7 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
         }
     }
     else if (back_id == -4){
+        fprintf(stderr, "ERROR: Message timeout.\n");
         return 1;
     }
     else if (back_id >= 0){  //  Received other code.

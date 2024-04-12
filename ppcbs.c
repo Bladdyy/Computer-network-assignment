@@ -125,6 +125,10 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
         // If connected client sent another 'CONN', and there are retransmissions.
         if (*sess_id != prot->session_id){
             fprintf(stderr, "ERROR: Another client tried to connect.\n");
+            create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONRJT.
+            if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending CONRJT.
+                fprintf(stderr, "ERROR: Couldn't send another CONRJT that client.\n");
+            }
         }
         else if (*udpr){
             // Resend CONACC.
@@ -134,19 +138,13 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
             }
         }
         else {  // Connected to the user using UDP.
-            create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONNRJT
+            fprintf(stderr, "ERROR: Connected client sent another CONN. \n");
+            create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONRJT
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){
-                fprintf(stderr, "ERROR: Couldn't send CONNRJT.\n");
+                fprintf(stderr, "ERROR: Couldn't send CONRJT.\n");
             }
-            // If connected client sent another 'CONN', and there are no retransmissions.
-            if (*sess_id == prot->session_id){
-                fprintf(stderr, "ERROR: Connected client sent another CONN. \n");
-                free(to_send);
-                return 1;  // Disconnect user.
-            }
-            else{  // Different client wanted to connect.
-                fprintf(stderr, "ERROR: There is a client already connected.\n");
-            }
+            free(to_send);
+            return 1;
         }
     }
     free(to_send);
