@@ -9,7 +9,6 @@
 #include "common.h"
 #include "protconst.h"
 
-
 // Ends connection with current client.
 // Sets 'session ID', 'Bites to read' and 'last read package' to default values.
 void to_default(unsigned long long *last, bool *udpr, unsigned long long *trials, bool *connected){
@@ -49,10 +48,11 @@ int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udp
     }
     // Checks if package's ID is correct.
     if ((*last < prot->pack_id && *udpr) || (*last != prot->pack_id && !(*udpr))){
+        fprintf(stderr, "ERROR: Client sent a package with wrong ID.\n");
         create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0);  // RJT
         to_default(last, udpr, trials, connected);  // Ends connection with client, so parameters are being set to default values.
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){ // Sends RJT.
-            fprintf(stderr, "ERROR: Couldn't receive next part of message.\n");
+            fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
         }
     }
     // Retransmission of ACC.
@@ -240,8 +240,12 @@ int udp_server(int socket_fd){
                             fprintf(stderr, "ERROR: Couldn't allocate the memory for message.\n");
                         }
                     }
-                    else if (connected && sess_id == prot->session_id){  // Currently connected client with wrong ID package.
-                            to_default(&last, &udpr, &trials, &connected);  // Disconnecting user.
+                    else if (!connected || prot->session_id != sess_id){
+                        fprintf(stderr, "ERROR: Not connected user tried to send a package.\n");
+                    }
+                    else{  // Currently connected client with wrong ID package.
+                        fprintf(stderr, "ERROR: Currently connected client sent package with incorrect ID.\n");
+                        to_default(&last, &udpr, &trials, &connected);  // Disconnecting user.
                     }
                     free(prot);
                 }
@@ -328,10 +332,10 @@ int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *s
         }
         else{  // DATA but with wrong parameters.
             if (*sess_id != session){  // Incorrect session ID.
-                fprintf(stderr, "ERROR: Wrong session id.\n");
+                fprintf(stderr, "ERROR: Wrong session id in DATA package.\n");
             }
             else{  // Incorrect pack ID.
-                fprintf(stderr, "ERROR: Wrong data id.\n");
+                fprintf(stderr, "ERROR: Wrong data id in DATA package.\n");
             }
             package *send_to = malloc(sizeof(package));
             if (malloc_error(send_to) == 0){
