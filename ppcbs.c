@@ -107,16 +107,26 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
         if (prot->protocol == 3){
             *udpr = true;
         }
+        else if (prot->protocol != 2){  // Not UDP/UDPr.
+            fprintf(stderr, "ERROR: Client tried to connect using wrong protocol.\n");
+            free(to_send);
+            return 1;
+        }
         create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);  // CONNACC
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending assent for connection.
             fprintf(stderr, "ERROR: Couldn't connect with the client.\n");
+            free(to_send);
             return 1;  // Disconnect user.
         }
+        free(to_send);
         return 2;  // Connected to new client.
     }
     else{  // Server was already connected with a client.
         // If connected client sent another 'CONN', and there are retransmissions.
-        if (*sess_id == prot->session_id && *udpr){
+        if (*sess_id != prot->session_id){
+            fprintf(stderr, "ERROR: Another client tried to connect.\n");
+        }
+        else if (*udpr){
             // Resend CONACC.
             create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending assent for connection.
@@ -131,6 +141,7 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
             // If connected client sent another 'CONN', and there are no retransmissions.
             if (*sess_id == prot->session_id){
                 fprintf(stderr, "ERROR: Connected client sent another CONN. \n");
+                free(to_send);
                 return 1;  // Disconnect user.
             }
             else{  // Different client wanted to connect.
@@ -138,6 +149,7 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
             }
         }
     }
+    free(to_send);
     return 0;
 }
 

@@ -224,7 +224,8 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
         trial++;
     }
     if (back_id == 3){  // Received 'CONRJT'.
-        return 0;
+        fprintf(stderr, "ERROR: Couldn't connect with the server.\n");
+        return 1;
     }
     else if (back_id == 2){  // Received 'CONACC'.
         unsigned long long pack_id = 0;
@@ -264,7 +265,6 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
         }
     }
     else if (back_id == -4){
-        fprintf(stderr, "ERROR: Message timeout.\n");
         return 1;
     }
     else if (back_id >= 0){  //  Received other code.
