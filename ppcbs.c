@@ -122,7 +122,6 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
         return 2;  // Connected to new client.
     }
     else{  // Server was already connected with a client.
-        // If connected client sent another 'CONN', and there are retransmissions.
         if (*sess_id != prot->session_id){
             fprintf(stderr, "ERROR: Another client tried to connect.\n");
             create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONRJT.
@@ -130,6 +129,7 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
                 fprintf(stderr, "ERROR: Couldn't send another CONRJT that client.\n");
             }
         }
+        // If connected client sent another 'CONN', and there are retransmissions.
         else if (*udpr){
             // Resend CONACC.
             create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);
@@ -237,9 +237,6 @@ int udp_server(int socket_fd){
                             memcpy(msg, buff + sizeof(package), prot->byte_len);
                             DATA_handler(&unpack, &last, &udpr, &connected, &trials, prot, socket_fd, client_address, address_length, msg);
                             free(msg);
-                        }
-                        else {
-                            fprintf(stderr, "ERROR: Couldn't allocate the memory for message.\n");
                         }
                     }
                     else if (!connected || prot->session_id != sess_id){

@@ -165,7 +165,7 @@ int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_i
     int back_id = recv_ACC(socket_fd, sess_id, pack_id);
     unsigned long long trial = 0;
     while ((back_id == -4 || back_id == 2) && trial < MAX_RETRANSMITS){  // While receives past accepts or timeouts.
-        if (back_id == -4){  // Timeout
+        if (back_id == -4){  // Timeout.
             trial++;
             // Retransmits.
             if (send_udp_pack(socket_fd, data, server_address, msg) == 1){
