@@ -140,7 +140,7 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
         if (errno == EAGAIN){  // Timeout.
             return -4;
         }
-        else{
+        else{  // Wrong message.
             return -2;
         }
     }
