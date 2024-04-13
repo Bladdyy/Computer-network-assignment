@@ -313,6 +313,7 @@ int tcp_conn(char *msg, unsigned long long len, int socket_fd, unsigned long lon
     create_pack(conn, 1, sess_id, 3, len, 0, 0);  // CONN.
     if (tcp_write(socket_fd, conn, sizeof(package)) == 1){  // Sending CONN.
         fprintf(stderr, "ERROR: Couldn't send message.\n");
+        free(conn);
         return 1;
     }
     int read = tcp_read_prot(socket_fd, sess_id);  // Receiving CONNACC.

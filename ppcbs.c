@@ -176,7 +176,10 @@ int udp_server(int socket_fd){
                     if (trials < MAX_RETRANSMITS){
                         trials++;  // Another trial.
                         package *to_send = malloc(sizeof(package));
-                        if (last > 0){  // Some data received.
+                        if (malloc_error(to_send) == 1){
+                            to_default(&last, &udpr, &trials, &connected);
+                        }
+                        else if (last > 0){  // Some data received.
                             // Resending ACC.
                             create_pack(to_send, 5, sess_id, 0, 0, last - 1, 0);
                             if (send_pack(socket_fd, to_send, client, sizeof(client))){
@@ -191,6 +194,7 @@ int udp_server(int socket_fd){
                                 fprintf(stderr, "ERROR: Couldn't resend CONNACC.\n");
                             }
                         }
+                        free(to_send);
                     }
                     else{
                         fprintf(stderr, "ERROR: Message timeout.\n");
