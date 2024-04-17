@@ -11,7 +11,7 @@
 
 // Ends connection with current client.
 // Sets 'session ID', 'Bites to read' and 'last read package' to default values.
-void to_default(unsigned long long *last, bool *udpr, unsigned long long *trials, bool *connected){
+void to_default(uint64_t *last, bool *udpr, uint64_t *trials, bool *connected){
     *last = 0;
     *udpr = false;
     *connected = false;
@@ -40,41 +40,43 @@ int send_pack(int socket_fd, package *to_send, struct sockaddr_in client_address
 // 'sess_id' - ID current connection with client, 'unpack' - number of bites left to recieve from all packages,
 // 'last' - ID of last received package, 'prot' - received package with information about 'msg', 'msg' - received bites.
 // ACC send and check other things with retransmissions in server.
-int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udpr, bool *connected, unsigned long long *trials, package *prot,
+int DATA_handler(uint64_t *unpack, uint64_t *last, bool *udpr, bool *connected, uint64_t *trials, package *prot,
                   int socket_fd, struct sockaddr_in client_address, socklen_t address_length, void* msg){
     package *to_send = malloc(sizeof(package));
     if (malloc_error(to_send) == 1){
         return 1;
     }
+    uint64_t pack_id = be64toh(prot->pack_id);
     // Checks if package's ID is correct.
-    if ((*last < prot->pack_id && *udpr) || (*last != prot->pack_id && !(*udpr))){
+    if ((*last < pack_id && *udpr) || (*last != pack_id && !(*udpr))){
         fprintf(stderr, "ERROR: Client sent a package with wrong ID.\n");
-        create_pack(to_send, 6, prot->session_id, 0, 0, prot->pack_id,0);  // RJT
+        create_pack(to_send, 6, prot->session_id, 0, 0, pack_id,0);  // RJT
         to_default(last, udpr, trials, connected);  // Ends connection with client, so parameters are being set to default values.
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){ // Sends RJT.
             fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
         }
     }
     // Retransmission of ACC.
-    else if (*last > prot->pack_id && *udpr){
-        create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
+    else if (*last > pack_id && *udpr){
+        create_pack(to_send, 5, prot->session_id, 0, 0, pack_id, 0); // ACC
         if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
             fprintf(stderr, "ERROR: Couldn't send ACC\n");
         }
     }
     else{  // Protocol is correct.
-        if (write(STDOUT_FILENO, msg, prot->byte_len) < 0){   // Writing message to stdout.
+        uint32_t byte_len = be32toh(prot->byte_len);
+        if (write(STDOUT_FILENO, msg, byte_len) < 0){   // Writing message to stdout.
             to_default(last, udpr, trials, connected);
             free(to_send);
             fprintf(stderr, "ERROR: Couldn't write message. Disconnecting client.\n");
             return 1;
         }
-        *unpack -= prot->byte_len;  // Reduces the number of bites to read in the future.
+        *unpack -= byte_len;  // Reduces the number of bites to read in the future.
         *last = *last + 1;  // Next package ID update.
 
         if (*udpr){  // Sending ACC.
             *trials = 0;
-            create_pack(to_send, 5, prot->session_id, 0, 0, prot->pack_id, 0); // ACC
+            create_pack(to_send, 5, prot->session_id, 0, 0, pack_id, 0); // ACC
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
                 fprintf(stderr, "ERROR: Couldn't send ACC\n");
             }
@@ -95,7 +97,7 @@ int DATA_handler(unsigned long long *unpack, unsigned long long *last, bool *udp
 // Handles 'CONN' packages.
 // 'sess_id' - ID current connection with client, 'unpack' - number of bites left to recieve from all packages,
 // 'last' - ID of last received package, 'prot' - received package with information about request to connect.
-int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *udpr, package *prot, int socket_fd, struct sockaddr_in client_address, socklen_t address_length, bool *connected){
+int CONN_handler(uint64_t *sess_id, uint64_t *unpack, bool *udpr, package *prot, int socket_fd, struct sockaddr_in client_address, socklen_t address_length, bool *connected){
     package *to_send = malloc(sizeof(package));  // Answer to the request.
     if (malloc_error(to_send) == 1){
         return 0;
@@ -103,7 +105,7 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
     if (!(*connected)){  // Server isn't currently holding any connection.
         // Creating new connection,
         *sess_id = prot->session_id;
-        *unpack = prot->length;
+        *unpack = be64toh(prot->length);
         if (prot->protocol == 3){
             *udpr = true;
         }
@@ -154,10 +156,10 @@ int CONN_handler(unsigned long long *sess_id, unsigned long long *unpack, bool *
 
 //  UDP server lifetime.
 int udp_server(int socket_fd){
-    unsigned long long sess_id = 0;  // Session ID of currently connected client.
-    unsigned long long unpack = 0;  // Number of bites left to receive.
-    unsigned long long last = 0;  // ID of last received package.
-    unsigned long long trials = 0;
+    uint64_t sess_id = 0;  // Session ID of currently connected client.
+    uint64_t unpack = 0;  // Number of bites left to receive.
+    uint64_t last = 0;  // ID of last received package.
+    uint64_t trials = 0;
     struct sockaddr_in client;
     bool connected = false;  // User connected.
     bool udpr = false;  // User uses UDPR.
@@ -232,9 +234,10 @@ int udp_server(int socket_fd){
                         }
                     }
                     else if (connected && prot->id == 4 && prot->session_id == sess_id){  // DATA and correct session ID.
-                        char* msg = malloc(prot->byte_len);
+                        uint32_t byte_len = be32toh(prot->byte_len);
+                        char* msg = malloc(byte_len);
                         if (malloc_error(msg) == 0){
-                            memcpy(msg, buff + sizeof(package), prot->byte_len);
+                            memcpy(msg, buff + sizeof(package), byte_len);
                             DATA_handler(&unpack, &last, &udpr, &connected, &trials, prot, socket_fd, client_address, address_length, msg);
                             free(msg);
                         }
@@ -264,7 +267,7 @@ int udp_server(int socket_fd){
 
 
 // Disconnecting currently connected user from the server.
-void tcp_disconnect(bool *connected, bool *conacc, unsigned long long *pack_id, int socket_fd){
+void tcp_disconnect(bool *connected, bool *conacc, uint64_t *pack_id, int socket_fd){
     *connected = false;
     *conacc = false;
     *pack_id = 0;
@@ -273,7 +276,7 @@ void tcp_disconnect(bool *connected, bool *conacc, unsigned long long *pack_id, 
 
 
 // Reads data.
-int tcp_data(int socket_fd, unsigned long int len, unsigned long long *size){
+int tcp_data(int socket_fd, uint32_t len, uint64_t *size){
     char* buffer = malloc(len);
     if (malloc_error(buffer) == 1){
         return 1;
@@ -295,7 +298,7 @@ int tcp_data(int socket_fd, unsigned long int len, unsigned long long *size){
 
 // Handles getting new packages. Size is a pointer to size left of message.
 // Demanded is the ID of package that server wants to recieve. Pack_id is the id of next package with data to recieve.
-int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *size, int demanded, unsigned long long pack_id){
+int tcp_handle(int socket_fd, uint64_t *sess_id, uint64_t *size, int demanded, uint64_t pack_id){
     package *pack = malloc(sizeof(package));
     if (malloc_error(pack) == -1){
         return 1;
@@ -305,12 +308,12 @@ int tcp_handle(int socket_fd, unsigned long long *sess_id, unsigned long long *s
         return 1;
     }
     // Saves information.
-    unsigned char id = pack->id;
-    unsigned long long session = pack->session_id;
-    unsigned long long current = pack->pack_id;
-    unsigned long long length = pack->length;
-    unsigned char prot = pack->protocol;
-    unsigned long int byte_len = pack->byte_len;
+    uint8_t id = pack->id;
+    uint64_t session = pack->session_id;
+    uint64_t current = be64toh(pack->pack_id);
+    uint64_t length = be64toh(pack->length);
+    uint8_t prot = pack->protocol;
+    uint32_t byte_len = be32toh(pack->byte_len);
     free(pack);
 
     if (demanded == id){  // ID of received package matches demanded ID.
@@ -362,9 +365,9 @@ int tcp_server(int socket_fd){
     bool connected = false;          // Connected to any user.
     bool conacc = false;             // Accepted connection from connected user.
     int client_fd;                   // Connected user's socket.
-    unsigned long long size;         // Size of client's message.
-    unsigned long long sess_id;      // Client's session ID.
-    unsigned long long pack_id = 0;  // ID of next package.
+    uint64_t size;         // Size of client's message.
+    uint64_t sess_id;      // Client's session ID.
+    uint64_t pack_id = 0;  // ID of next package.
     for (;;){
         if (!connected){  // Connecting with the new client.
             struct sockaddr_in client_address;

@@ -13,17 +13,17 @@
 #define MAX_QUEUE 100
 // Data package components.
 typedef struct package{
-    unsigned char id;
-    unsigned long long session_id;
-    unsigned char protocol;
-    unsigned long long length;
-    unsigned long long pack_id;
-    unsigned long int byte_len;
+    uint8_t id;
+    uint64_t session_id;
+    uint8_t protocol;
+    uint64_t length;
+    uint64_t pack_id;
+    uint32_t byte_len;
 } package;
 
 
 // Creates pack with given data.
-void create_pack(package* pack, unsigned char id, unsigned long long sess_id, unsigned char prot, unsigned long long len, unsigned long long pack_id, unsigned long bit_len);
+void create_pack(package* pack, uint8_t id, uint64_t sess_id, uint8_t prot, uint64_t len, uint64_t pack_id, uint32_t bit_len);
 
 
 // Checks if malloc allocated spacer on 'pointer'.
@@ -35,8 +35,8 @@ uint16_t read_port(char const *string, bool *error);
 
 
 // Writing while tcp.
-int tcp_write(int socket_fd, void *data, unsigned long int size);
+int tcp_write(int socket_fd, void *data, uint32_t size);
 
 
 // Reading while tcp.
-int tcp_read(int socket_fd, void* data, unsigned long int size);
+int tcp_read(int socket_fd, void* data, uint32_t size);

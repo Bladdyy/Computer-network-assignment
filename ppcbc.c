@@ -7,8 +7,8 @@
 
 
 // Generates random session ID.
-unsigned long long gen_sess_id(){
-    unsigned long long sess = 0;
+uint64_t gen_sess_id(){
+    uint64_t sess = 0;
     srand(time(0));
     for (int i = 0; i < 64; i++){
         sess = sess * 2 + rand() % 2;
@@ -18,7 +18,7 @@ unsigned long long gen_sess_id(){
 
 
 // Calculates smaller value.
-size_t min_msg(unsigned long long len){
+size_t min_msg(uint64_t len){
     if (len >= MAX_MSG){
         return MAX_MSG;
     }
@@ -59,12 +59,14 @@ static struct sockaddr_in get_server_address(char const *host, uint16_t port, bo
 // Sends one package to server using UDP protocol.
 int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_address, char* msg){
     int code = 0;  // Return code.
+    uint32_t byte_len = be32toh(pack->byte_len);
+
     void* buffer;
     if (msg == NULL){  // No message, only package.
         buffer = malloc(sizeof(package));  // Buffer with package and message.
     }
     else{
-        buffer = malloc(sizeof(package) + pack->byte_len);
+        buffer = malloc(sizeof(package) + byte_len);
     }
 
     if (malloc_error(buffer) == 1){
@@ -74,17 +76,17 @@ int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_addres
 
     // Sending some part of message.
     if (msg != NULL){
-        memcpy(buffer + sizeof(package), msg + MAX_MSG * pack->pack_id, pack->byte_len);
+        memcpy(buffer + sizeof(package), msg + MAX_MSG * be64toh(pack->pack_id), byte_len);
     }
 
     // Sending buffer to server.
-    ssize_t sent_length = sendto(socket_fd, buffer, sizeof(package) + pack->byte_len, 0,
+    ssize_t sent_length = sendto(socket_fd, buffer, sizeof(package) + byte_len, 0,
                                  (struct sockaddr *) &server_address, sizeof(server_address));
 
     if (sent_length < 0) {  // Couldn't send.
         code = 1;
     }
-    else if ((size_t) sent_length != sizeof(package) + pack->byte_len) {  // Couldn't send fully
+    else if ((size_t) sent_length != sizeof(package) + byte_len) {  // Couldn't send fully
         fprintf(stderr, "ERROR: Package with id %d was sent incompletely.\n", pack->id);
     }
     free(buffer);
@@ -93,7 +95,7 @@ int send_udp_pack(int socket_fd, package *pack, struct sockaddr_in server_addres
 
 
 // Receives package using UDP protocol.
-int recv_udp_prot(int socket_fd, unsigned long long sess_id){
+int recv_udp_prot(int socket_fd, uint64_t sess_id){
     package *back = malloc(sizeof(package));  // Allocating space for new package.
     if (malloc_error(back) == 1){
         return -1;
@@ -102,8 +104,8 @@ int recv_udp_prot(int socket_fd, unsigned long long sess_id){
     socklen_t address_length = (socklen_t) sizeof(receive_address);
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(package), 0,
                                        (struct sockaddr *) &receive_address, &address_length);
-    unsigned char id = back->id;
-    unsigned long long sess = back->session_id;
+    uint8_t id = back->id;
+    uint64_t sess = back->session_id;
     free(back);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
@@ -123,7 +125,7 @@ int recv_udp_prot(int socket_fd, unsigned long long sess_id){
 
 
 // Receives ACC. Sets past accepts ID's to '2'.
-int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_id){
+int recv_ACC(int socket_fd, uint64_t sess_id, uint64_t pack_id){
     package *back = malloc(sizeof(package));  // Allocating space for new package.
     if (malloc_error(back) == 1){
         return -1;
@@ -132,9 +134,9 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
     socklen_t address_length = (socklen_t) sizeof(receive_address);
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(package), 0,
                                        (struct sockaddr *) &receive_address, &address_length);
-    unsigned char id = back->id;
-    unsigned long long sess = back->session_id;
-    unsigned long long pack = back->pack_id;
+    uint8_t id = back->id;
+    uint64_t sess = back->session_id;
+    uint64_t pack = be64toh(back->pack_id);
     free(back);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
@@ -161,9 +163,9 @@ int recv_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_
 
 
 //  Tries to receive ACC.
-int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_id, package* data, struct sockaddr_in server_address, char* msg){
+int get_ACC(int socket_fd, uint64_t sess_id, uint64_t pack_id, package* data, struct sockaddr_in server_address, char* msg){
     int back_id = recv_ACC(socket_fd, sess_id, pack_id);
-    unsigned long long trial = 0;
+    uint64_t trial = 0;
     while ((back_id == -4 || back_id == 2) && trial < MAX_RETRANSMITS){  // While receives past accepts or timeouts.
         if (back_id == -4){  // Timeout.
             trial++;
@@ -193,7 +195,7 @@ int get_ACC(int socket_fd, unsigned long long sess_id, unsigned long long pack_i
 
 
 // Sends packages of data to server using UDP protocol.
-int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_in server_address, unsigned long long sess_id, bool udpr){
+int udp_conn(char* msg, uint64_t len, int socket_fd, struct sockaddr_in server_address, uint64_t sess_id, bool udpr){
     // Creating 'CONN' package.
     package *conn = malloc(sizeof(package));
     if (malloc_error(conn) == 1){
@@ -212,7 +214,7 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
         return 1;
     }
     // Receive a message.
-    unsigned long long trial = 0;
+    uint64_t trial = 0;
     int back_id = recv_udp_prot(socket_fd, sess_id);
     // Retransmissions.
     while (back_id == -4 && udpr && trial < MAX_RETRANSMITS){
@@ -229,7 +231,7 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
         return 1;
     }
     else if (back_id == 2){  // Received 'CONACC'.
-        unsigned long long pack_id = 0;
+        uint64_t pack_id = 0;
         while (len != 0){  // Sending 'DATA" packages.
             package *data = malloc(sizeof(package));
             if (malloc_error(data) == 1){
@@ -246,7 +248,7 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
                 free(data);
                 return 1;
             }
-            len -= data->byte_len;
+            len -= be32toh(data->byte_len);
             free(data);
             pack_id++;
 
@@ -282,7 +284,7 @@ int udp_conn(char* msg, unsigned long long len, int socket_fd, struct sockaddr_i
 
 
 // Reads and validates new protocol. Returns ID of validated protocol.
-int tcp_read_prot(int socket_fd, unsigned long long sess_id){
+int tcp_read_prot(int socket_fd, uint64_t sess_id){
     package *pack = malloc(sizeof(package));
     if (malloc_error(pack) == -1){
         return -1;
@@ -292,8 +294,8 @@ int tcp_read_prot(int socket_fd, unsigned long long sess_id){
         free(pack);
         return -1;
     }
-    unsigned long long session = pack->session_id;
-    unsigned char id = pack->id;
+    uint64_t session = pack->session_id;
+    uint8_t id = pack->id;
     free(pack);
 
     if (sess_id != session) {  // Checking session ID.
@@ -305,7 +307,7 @@ int tcp_read_prot(int socket_fd, unsigned long long sess_id){
 
 
 // Sends packages of data using TCP protocol.
-int tcp_conn(char *msg, unsigned long long len, int socket_fd, unsigned long long sess_id){
+int tcp_conn(char *msg, uint64_t len, int socket_fd, uint64_t sess_id){
     package *conn = malloc(sizeof(package));
     if (malloc_error(conn) == 1){
         return 1;
@@ -331,25 +333,26 @@ int tcp_conn(char *msg, unsigned long long len, int socket_fd, unsigned long lon
         return 1;
     }
 
-    unsigned long int max_size = min_msg(len);
+    uint32_t max_size = min_msg(len);
     void* buffer = malloc(sizeof(package) + max_size);  // DATA + message.
     if (malloc_error(buffer) == 1){
         free(data);
         return 1;
     }
-    unsigned long long pack_id = 0;
+    uint64_t pack_id = 0;
     while (len != 0){  // Sending whole package in portions
         create_pack(data, 4, sess_id, 0, 0, pack_id, min_msg(len));     // Creating new package of data.
         memset(buffer,0, sizeof(package) + max_size);
         memcpy(buffer, data, sizeof(package));                                      // Copying new package to buffer.
-        memcpy(buffer + sizeof(package), msg + pack_id * MAX_MSG, data->byte_len);  // Copying message to buffer.
-        if (tcp_write(socket_fd, buffer, sizeof(package) + data->byte_len) == 1){     // Sending DATA + message.
+        uint32_t byte_len = be32toh(data->byte_len);
+        memcpy(buffer + sizeof(package), msg + pack_id * MAX_MSG, byte_len);  // Copying message to buffer.
+        if (tcp_write(socket_fd, buffer, sizeof(package) + byte_len) == 1){     // Sending DATA + message.
             fprintf(stderr, "ERROR: Couldn't send message.\n");
             free(data);
             free(buffer);
             return 1;
         }
-        len -= data->byte_len;  // Bytes sent.
+        len -= byte_len;        // Bytes sent.
         pack_id++;              // Next pack.
     }
     free(buffer);
@@ -403,7 +406,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    unsigned long long sess_id = gen_sess_id();  // Generating session id.
+    uint64_t sess_id = gen_sess_id();  // Generating session id.
     int sock, prot;  // Protocol settings.
     if (strcmp(protocol, "tcp") == 0){  // TCP.
         sock = SOCK_STREAM;
