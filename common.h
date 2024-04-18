@@ -12,7 +12,7 @@
 #define MAX_MSG 64000
 #define MAX_QUEUE 100
 // Data package components.
-typedef struct package{
+typedef struct __attribute__ ((__packed__)) package{
     uint8_t id;
     uint64_t session_id;
     uint8_t protocol;
