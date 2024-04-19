@@ -66,6 +66,7 @@ int DATA_handler(uint64_t *unpack, uint64_t *last, bool *udpr, bool *connected, 
     else{  // Protocol is correct.
         uint32_t byte_len = be32toh(prot->byte_len);
         if (write(STDOUT_FILENO, msg, byte_len) < 0){   // Writing message to stdout.
+            fflush(stdout);
             to_default(last, udpr, trials, connected);
             free(to_send);
             fprintf(stderr, "ERROR: Couldn't write message. Disconnecting client.\n");
@@ -287,6 +288,7 @@ int tcp_data(int socket_fd, uint32_t len, uint64_t *size){
         return 1;
     }
     if (write(STDOUT_FILENO, buffer, len) < 0){  // Writes data on stdout.
+        fflush(stdout);
         free(buffer);
         fprintf(stderr, "ERROR: Couldn't write received message.\n");
         return 1;
