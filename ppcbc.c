@@ -394,7 +394,7 @@ int main(int argc, char *argv[]) {
     char* msg = NULL;  // Whole message.
     size_t size = 0;
     // Tries to read message.
-    long long code = getline(&msg, &size, stdin);
+    long long code = getdelim(&msg, &size, EOF, stdin);
     if (code == -1) {  // Error while reading message.
         free(msg);
         fprintf(stderr, "Couldn't read message.\n");
