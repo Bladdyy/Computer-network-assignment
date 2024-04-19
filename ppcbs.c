@@ -324,6 +324,7 @@ int tcp_handle(int socket_fd, uint64_t *sess_id, uint64_t *size, int demanded, u
         if (demanded == 1){  // CONN.
             if (prot != 3){  // Not TCP.
                 fprintf(stderr, "ERROR: Wrong protocol.\n");
+                return 1;
             }
             else{  // Connected new user succesfully.
                 *sess_id = session;
