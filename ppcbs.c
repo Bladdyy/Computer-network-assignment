@@ -71,6 +71,7 @@ int DATA_handler(uint64_t *unpack, uint64_t *last, bool *udpr, bool *connected, 
             fprintf(stderr, "ERROR: Couldn't write message. Disconnecting client.\n");
             return 1;
         }
+        fflush(stdout);
         *unpack -= byte_len;  // Reduces the number of bites to read in the future.
         *last = *last + 1;  // Next package ID update.
 
@@ -290,6 +291,7 @@ int tcp_data(int socket_fd, uint32_t len, uint64_t *size){
         fprintf(stderr, "ERROR: Couldn't write received message.\n");
         return 1;
     }
+    fflush(stdout);
     *size -= len;  // Lessens size of data to read.
     free(buffer);
     return 0;
