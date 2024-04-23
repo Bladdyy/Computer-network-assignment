@@ -56,14 +56,7 @@ int DATA_handler(uint64_t *unpack, uint64_t *last, bool *udpr, bool *connected, 
             fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
         }
     }
-    // Retransmission of ACC.
-    else if (*last > pack_id && *udpr){
-        create_pack(to_send, 5, prot->session_id, 0, 0, pack_id, 0); // ACC
-        if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sends ACC.
-            fprintf(stderr, "ERROR: Couldn't send ACC\n");
-        }
-    }
-    else{  // Protocol is correct.
+    else if (!(*last > pack_id && *udpr)){  // Protocol is correct.
         uint32_t byte_len = be32toh(prot->byte_len);
         if (write(STDOUT_FILENO, msg, byte_len) < 0){   // Writing message to stdout.
             fflush(stdout);
@@ -133,15 +126,7 @@ int CONN_handler(uint64_t *sess_id, uint64_t *unpack, bool *udpr, package *prot,
                 fprintf(stderr, "ERROR: Couldn't send another CONRJT that client.\n");
             }
         }
-        // If connected client sent another 'CONN', and there are retransmissions.
-        else if (*udpr){
-            // Resend CONACC.
-            create_pack(to_send, 2, prot->session_id, 0, 0, 0, 0);
-            if (send_pack(socket_fd, to_send, client_address, address_length) == 1){  // Sending assent for connection.
-                fprintf(stderr, "ERROR: Couldn't send another CONACC to current client.\n");
-            }
-        }
-        else {  // Connected to the user using UDP.
+        else if (!*udpr){  // Connected to the user using UDP.
             fprintf(stderr, "ERROR: Connected client sent another CONN. \n");
             create_pack(to_send, 3, prot->session_id, 0, 0, 0, 0);  // CONRJT
             if (send_pack(socket_fd, to_send, client_address, address_length) == 1){
