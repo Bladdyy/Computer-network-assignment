@@ -27,14 +27,15 @@ int send_pack(uint8_t id, int socket_fd, void *to_send, size_t size, struct sock
         return 1;
     }
     memcpy(buffer, &id, sizeof(uint8_t));
-    memcpy(buffer, to_send, size);
+    memcpy(buffer + sizeof(uint8_t), to_send, size);
     ssize_t sent_length = sendto(socket_fd, buffer, size + sizeof(uint8_t), 0,
                                  (struct sockaddr *) &client_address, address_length);
+
     if (sent_length < 0) {  // Couldn't send.
         fprintf(stderr, "ERROR: Couldn't send Package.\n");
         code = 1;
     }
-    else if ((size_t) sent_length != size) {  // Couldn't send fully
+    else if ((size_t) sent_length != size + sizeof(uint8_t)) {  // Couldn't send fully
         fprintf(stderr, "ERROR: Package was sent incompletely.\n");
         code = 1;
     }
@@ -146,105 +147,99 @@ int udp_server(int socket_fd){
 
     // Handling clients.
     for (;;) {
-        void *buff = malloc(sizeof(data_msg) + MAX_MSG);  // Buffer for protocol ID.
-        if (malloc_error(buff) == 0){
-            struct sockaddr_in client_address;
-            socklen_t address_length = (socklen_t) sizeof(client_address);
-            ssize_t received_length = recvfrom(socket_fd, buff, sizeof(data_msg) + MAX_MSG, 0,
-                                               (struct sockaddr *) &client_address, &address_length);
-            if (received_length < 0) {
-                // If there is udpr client connected but no message has been received in 'MAX_WAIT' seconds.
-                if (udpr && errno == EAGAIN){
-                    if (trials < MAX_RETRANSMITS){
-                        trials++;  // Another trial.
-                        if (last > 0){  // Some data received.
-                            status to_send;  // ACC
-                            create_status(&to_send, sess_id, last - 1);
-                            if (send_pack(5, socket_fd, &to_send, sizeof(status), client, sizeof(client))){
-                                fprintf(stderr, "ERROR: Couldn't resend ACC.\n");
-                            }
-                        }
-                        else{  // No data received yet.
-                            base to_send;
-                            create_base(&to_send, sess_id);
-                            if (send_pack(2, socket_fd, &to_send, sizeof(base), client, sizeof(client))){
-                                fprintf(stderr, "ERROR: Couldn't resend CONNACC.\n");
-                            }
+        static char buff[BUFFOR_SIZE + sizeof(data_msg)];  // Buffer for protocol ID.
+        struct sockaddr_in client_address;
+        socklen_t address_length = (socklen_t) sizeof(client_address);
+        ssize_t received_length = recvfrom(socket_fd, buff, sizeof(data_msg) + BUFFOR_SIZE, 0,
+                                           (struct sockaddr *) &client_address, &address_length);
+        if (received_length < 0) {
+            // If there is udpr client connected but no message has been received in 'MAX_WAIT' seconds.
+            if (udpr && errno == EAGAIN){
+                if (trials < MAX_RETRANSMITS){
+                    trials++;  // Another trial.
+                    if (last > 0){  // Some data received.
+                        status to_send;  // ACC
+                        create_status(&to_send, sess_id, last - 1);
+                        if (send_pack(5, socket_fd, &to_send, sizeof(status), client, sizeof(client))){
+                            fprintf(stderr, "ERROR: Couldn't resend ACC.\n");
                         }
                     }
-                    else{  // Too many retransmissions.
-                        fprintf(stderr, "ERROR: Message timeout.\n");
-                        to_default(&last, &udpr, &trials, &connected);
-                    }
-
-                }
-                // If there was an error receiving the message.
-                else if (errno != EAGAIN){
-                    fprintf(stderr, "ERROR: Couldn't receive message.\n");
-                    if (!udpr && connected){  // If client wasn't using UDP.
-                        to_default(&last, &udpr, &trials, &connected);  // Disconnect.
+                    else{  // No data received yet.
+                        base to_send;
+                        create_base(&to_send, sess_id);
+                        if (send_pack(2, socket_fd, &to_send, sizeof(base), client, sizeof(client))){
+                            fprintf(stderr, "ERROR: Couldn't resend CONNACC.\n");
+                        }
                     }
                 }
-                // User with no UDP timeout.
-                else if (errno == EAGAIN && connected){
+                else{  // Too many retransmissions.
                     fprintf(stderr, "ERROR: Message timeout.\n");
                     to_default(&last, &udpr, &trials, &connected);
                 }
+
             }
-            else{  // Got message.
-                uint8_t id;
-                memcpy(&id, buff, sizeof(uint8_t));
-                if (id == 1){  // CONN
-                    conn received;
-                    memcpy(&received, buff + sizeof(uint8_t), sizeof(conn));
-                    received.session_id = received.session_id;
-                    received.length = be64toh(received.length);
-                    int conn = CONN_handler(received, &sess_id, &unpack, &udpr, socket_fd, client_address, address_length, &connected);
-                    if (conn == 1){  // CONN error.
-                        fprintf(stderr, "ERROR: Ending connection with current client.\n");
-                        to_default(&last, &udpr, &trials, &connected);
-                    }
-                    else if (conn == 2){  // New user connected.
-                        client = client_address;
-                        connected = true;
-                    }
-                }
-                else if (connected && id == 4){  // DATA.
-                    data_msg received;
-                    memcpy(&received, buff + sizeof(uint8_t), sizeof(data_msg));
-                    received.session_id = received.session_id;
-                    received.pack_id = be64toh(received.pack_id);
-                    received.byte_len = be32toh(received.byte_len);
-                    if (sess_id == received.session_id){
-                        char* msg = malloc(received.byte_len);
-                        if (malloc_error(msg) == 0){
-                            memcpy(msg, buff + sizeof(data_msg) + sizeof(uint8_t), received.byte_len);
-                            DATA_handler(msg, &unpack, &last, &udpr, &connected, &trials, received, socket_fd, client_address, address_length);
-                            free(msg);
-                        }
-                    }
-                    else{
-                        fprintf(stderr, "ERROR: Different user tried to send package.\n");
-                        status to_send;
-                        create_status(&to_send, received.session_id, received.pack_id);  // RJT
-                        if (send_pack(6, socket_fd, &to_send, sizeof(status), client_address, address_length) == 1){ // Sends RJT.
-                            fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
-                        }
-                    }
-                }
-                else if (!connected){
-                    fprintf(stderr, "ERROR: Not connected user tried to send a package.\n");
-                }
-                else{  // Currently connected client with wrong ID package.
-                    fprintf(stderr, "ERROR: Currently connected client sent package with incorrect ID.\n");
-                    to_default(&last, &udpr, &trials, &connected);  // Disconnecting user.
+            // If there was an error receiving the message.
+            else if (errno != EAGAIN){
+                fprintf(stderr, "ERROR: Couldn't receive message.\n");
+                if (!udpr && connected){  // If client wasn't using UDP.
+                    to_default(&last, &udpr, &trials, &connected);  // Disconnect.
                 }
             }
-            free(buff);
+            // User with no UDP timeout.
+            else if (errno == EAGAIN && connected){
+                fprintf(stderr, "ERROR: Message timeout.\n");
+                to_default(&last, &udpr, &trials, &connected);
+            }
         }
-        else{
-            fprintf(stderr, "ERROR: Couldn't allocate memory to get new data.\n");
-            return 1;
+        else{  // Got message.
+            uint8_t id;
+            memcpy(&id, buff, sizeof(uint8_t));
+            if (id == 1){  // CONN
+                conn received;
+                memcpy(&received, buff + sizeof(uint8_t), sizeof(conn));
+                received.session_id = received.session_id;
+                received.length = be64toh(received.length);
+                int conn = CONN_handler(received, &sess_id, &unpack, &udpr, socket_fd, client_address, address_length, &connected);
+
+                if (conn == 1){  // CONN error.
+                    fprintf(stderr, "ERROR: Ending connection with current client.\n");
+                    to_default(&last, &udpr, &trials, &connected);
+                }
+                else if (conn == 2){  // New user connected.
+                    client = client_address;
+                    connected = true;
+                }
+            }
+            else if (connected && id == 4){  // DATA.
+                data_msg received;
+                memcpy(&received, buff + sizeof(uint8_t), sizeof(data_msg));
+                received.session_id = received.session_id;
+                received.pack_id = be64toh(received.pack_id);
+                received.byte_len = be32toh(received.byte_len);
+                if (sess_id == received.session_id){
+                    char* msg = malloc(received.byte_len);
+                    if (malloc_error(msg) == 0){
+                        memcpy(msg, buff + sizeof(data_msg) + sizeof(uint8_t), received.byte_len);
+                        DATA_handler(msg, &unpack, &last, &udpr, &connected, &trials, received, socket_fd, client_address, address_length);
+                        free(msg);
+                    }
+                }
+                else{
+                    fprintf(stderr, "ERROR: Different user tried to send package.\n");
+                    status to_send;
+                    create_status(&to_send, received.session_id, received.pack_id);  // RJT
+                    if (send_pack(6, socket_fd, &to_send, sizeof(status), client_address, address_length) == 1){ // Sends RJT.
+                        fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
+                    }
+                }
+            }
+            else if (!connected){
+                fprintf(stderr, "ERROR: Not connected user tried to send a package.\n");
+            }
+            else{  // Currently connected client with wrong ID package.
+                fprintf(stderr, "ERROR: Currently connected client sent package with incorrect ID.\n");
+                to_default(&last, &udpr, &trials, &connected);  // Disconnecting user.
+            }
         }
     }
     return 0;
@@ -325,17 +320,14 @@ int tcp_handle(int socket_fd, uint64_t *sess_id, uint64_t *size, uint8_t demande
                 else{  // Incorrect pack ID.
                     fprintf(stderr, "ERROR: Wrong data id in DATA package.\n");
                 }
-                void* to_send = malloc(sizeof(uint8_t) + sizeof(status));
-                if (malloc_error(to_send) == 0){
-                    uint8_t id = 6;
-                    status rjt;
-                    create_status(&rjt, received.session_id, received.pack_id);
-                    memcpy(to_send, &id, sizeof(uint8_t));
-                    memcpy(to_send + sizeof(uint8_t), &rjt, sizeof(status));
-                    if (tcp_write(socket_fd, to_send, sizeof(uint8_t) + sizeof(status)) == 1){  // Send RJT
-                        fprintf(stderr, "ERROR: Couldn't send RJT.\n");
-                    }
-                    free(to_send);
+                static char to_send[sizeof(uint8_t) + sizeof(status)];
+                uint8_t id = 6;
+                status rjt;
+                create_status(&rjt, received.session_id, received.pack_id);
+                memcpy(to_send, &id, sizeof(uint8_t));
+                memcpy(to_send + sizeof(uint8_t), &rjt, sizeof(status));
+                if (tcp_write(socket_fd, to_send, sizeof(uint8_t) + sizeof(status)) == 1){  // Send RJT
+                    fprintf(stderr, "ERROR: Couldn't send RJT.\n");
                 }
                 return 1;
             }
@@ -385,23 +377,16 @@ int tcp_server(int socket_fd){
                     tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
                 }
                 else{  // CONN received.
-                    void* to_send = malloc(sizeof(uint8_t) + sizeof(base));
-                    // TODO: print sizeof(base) and sizeof(uint64_t) to check if they're the same.
-                    if (malloc_error(to_send) == 1){
+                    static char to_send[sizeof(uint8_t) + sizeof(base)];
+                    conacc = true;
+                    uint8_t id = 2;
+                    base acc;
+                    create_base(&acc, sess_id);
+                    memcpy(to_send, &id, sizeof(uint8_t));
+                    memcpy(to_send + sizeof(uint8_t), &acc, sizeof(base));
+                    if (tcp_write(client_fd, to_send, sizeof(uint8_t) + sizeof(base)) == 1){  // Send CONACC.
                         tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
-                    }
-                    else{
-                        conacc = true;
-                        uint8_t id = 2;
-                        base acc;
-                        create_base(&acc, sess_id);
-                        memcpy(to_send, &id, sizeof(uint8_t));
-                        memcpy(to_send + sizeof(uint8_t), &acc, sizeof(base));
-                        if (tcp_write(client_fd, to_send, sizeof(uint8_t) + sizeof(base)) == 1){  // Send CONACC.
-                            tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
-                            fprintf(stderr, "ERROR: Couldn't send CONACC\n");
-                        }
-                        free(to_send);
+                        fprintf(stderr, "ERROR: Couldn't send CONACC\n");
                     }
                 }
             }
@@ -413,18 +398,15 @@ int tcp_server(int socket_fd){
                 else{  // Message got.
                     pack_id++;
                     if (size == 0){  // If whole message was read.
-                        void *to_send = malloc(sizeof(uint8_t) + sizeof(base));
-                        if (malloc_error(to_send) == 0){
-                            uint8_t id = 7;
-                            base rcvd;
-                            create_base(&rcvd, sess_id);
-                            memcpy(to_send, &id, sizeof(uint8_t));
-                            memcpy(to_send + sizeof(uint8_t), &rcvd, sizeof(base));
-                            int write = tcp_write(client_fd, to_send, sizeof(to_send));  // Send RCVD.
-                            if (write == 1){
-                                fprintf(stderr, "ERROR: Couldn't send recv\n");
-                            }
-                            free(to_send);
+                        static char to_send[sizeof(uint8_t) + sizeof(base)];
+                        uint8_t id = 7;
+                        base rcvd;
+                        create_base(&rcvd, sess_id);
+                        memcpy(to_send, &id, sizeof(uint8_t));
+                        memcpy(to_send + sizeof(uint8_t), &rcvd, sizeof(base));
+                        int write = tcp_write(client_fd, to_send, sizeof(uint8_t) + sizeof(base));  // Send RCVD.
+                        if (write == 1){
+                            fprintf(stderr, "ERROR: Couldn't send recv\n");
                         }
                         tcp_disconnect(&connected, &conacc, &pack_id, client_fd);
                     }
@@ -443,17 +425,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     char const *protocol = argv[1];  // Communication protocol.
-    bool *error = malloc(sizeof(bool));
-    if (malloc_error(error) == 1){
+    bool error = false;
+    uint16_t port = read_port(argv[2], &error);
+    if (error){  // There was an error getting port.
         return 1;
     }
-    *error = false;
-    uint16_t port = read_port(argv[2], error);
-    if (*error){  // There was an error getting port.
-        free(error);
-        return 1;
-    }
-    free(error);
 
     int sock;  // Setting for the socket.
     if (strcmp(protocol, "udp") == 0){  // UDP/UDPr

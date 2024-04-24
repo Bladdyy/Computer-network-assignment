@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #define MAX_MSG 64000
+#define BUFFOR_SIZE 64000
 #define MAX_QUEUE 100
 
 // Conn package components.

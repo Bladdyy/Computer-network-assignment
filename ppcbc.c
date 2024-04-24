@@ -93,10 +93,7 @@ int send_udp_pack(int socket_fd, int id, void *pack, size_t size, struct sockadd
 
 // Receives package using UDP protocol.
 int recv_udp_prot(int socket_fd, uint64_t sess_id){
-    void *back = malloc(sizeof(data_msg));  // Allocating space for new package.
-    if (malloc_error(back) == 1){
-        return -1;
-    }
+    static char back[sizeof(data_msg)];
     struct sockaddr_in receive_address;
     socklen_t address_length = (socklen_t) sizeof(receive_address);
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(data_msg), 0,
@@ -105,7 +102,6 @@ int recv_udp_prot(int socket_fd, uint64_t sess_id){
     uint64_t sess;
     memcpy(&id, back, sizeof(uint8_t));
     memcpy(&sess, back + sizeof(uint8_t), sizeof(uint64_t));
-    free(back);
     if (received_length < 0){  // No message received.
         if (errno == EAGAIN){  // Timeout.
             return -4;
@@ -125,10 +121,7 @@ int recv_udp_prot(int socket_fd, uint64_t sess_id){
 
 // Receives ACC. Sets past accepts ID's to '2'.
 int recv_ACC(int socket_fd, uint64_t sess_id, uint64_t pack_id){
-    void *back = malloc(sizeof(data_msg));  // Allocating space for new package.
-    if (malloc_error(back) == 1){
-        return -1;
-    }
+    static char back[sizeof(data_msg)];  // Allocating space for new package.
     struct sockaddr_in receive_address;
     socklen_t address_length = (socklen_t) sizeof(receive_address);
     ssize_t received_length = recvfrom(socket_fd, back, sizeof(data_msg), 0,
@@ -138,7 +131,6 @@ int recv_ACC(int socket_fd, uint64_t sess_id, uint64_t pack_id){
     memcpy(&id, back, sizeof(uint8_t));
     memcpy(&sess, back + sizeof(uint8_t), sizeof(uint64_t));
     if (received_length < 0){  // No message received.
-        free(back);
         if (errno == EAGAIN){  // Timeout.
             return -4;
         }
@@ -148,13 +140,11 @@ int recv_ACC(int socket_fd, uint64_t sess_id, uint64_t pack_id){
     }
     else if (sess_id != sess) {  // Session ID of message is not equal to client session ID.
         fprintf(stderr, "ERROR: Received message has wrong session ID\n");
-        free(back);
         return -3;
     }
     else if (id == 5){  // ACC received.
         uint64_t pack;
         memcpy(&pack, back + sizeof(uint8_t) + sizeof(uint64_t), sizeof(uint64_t));
-        free(back);
         pack = be64toh(pack);
         if (pack_id > pack){  // Old ACC.
             return 2;
@@ -280,20 +270,14 @@ int udp_conn(char* msg, uint64_t len, int socket_fd, struct sockaddr_in server_a
 
 // Reads and validates new protocol. Returns ID of validated protocol.
 int tcp_read_prot(int socket_fd, uint64_t sess_id){
-    void *pack = malloc(sizeof(data_msg));
-    if (malloc_error(pack) == -1){
+    static char pack[sizeof(uint8_t) + sizeof(base)];
+    if (tcp_read(socket_fd, pack, sizeof(uint8_t) + sizeof(base)) == 1){
         return -1;
     }
-    if (tcp_read(socket_fd, pack, sizeof(data_msg)) == 1){
-        free(pack);
-        return -1;
-    }
-    // TODO check if value of id is saved by memcpy. (write id and session values before and after free.)
     uint64_t session;
     uint8_t id;
     memcpy(&id, pack, sizeof(uint8_t));
     memcpy(&session, pack + sizeof(uint8_t), sizeof(uint64_t));
-    free(pack);
     if (sess_id != session) {  // Checking session ID.
         fprintf(stderr, "ERROR: Message with wrong session ID\n");
         return -1;
@@ -304,10 +288,7 @@ int tcp_read_prot(int socket_fd, uint64_t sess_id){
 
 // Sends packages of data using TCP protocol.
 int tcp_conn(char *msg, uint64_t len, int socket_fd, uint64_t sess_id){
-    void *data = malloc(sizeof(uint8_t) + sizeof(conn));
-    if (malloc_error(data) == 1){
-        return 1;
-    }
+    static char data[sizeof(uint8_t) + sizeof(conn)];
     uint8_t id = 1;
     conn pack;
     create_conn(&pack, sess_id, 3, len);  // CONN.
@@ -315,10 +296,8 @@ int tcp_conn(char *msg, uint64_t len, int socket_fd, uint64_t sess_id){
     memcpy(data + sizeof(uint8_t), &pack, sizeof(conn));
     if (tcp_write(socket_fd, data, sizeof(uint8_t) + sizeof(conn)) == 1){  // Sending CONN.
         fprintf(stderr, "ERROR: Couldn't send message.\n");
-        free(data);
         return 1;
     }
-    free(data);
     int read = tcp_read_prot(socket_fd, sess_id);  // Receiving CONNACC.
     if (read == -1){  // Message receive problem.
         return 1;
@@ -373,18 +352,11 @@ int main(int argc, char *argv[]) {
     }
     char const *protocol = argv[1];  // Communication protocol.
     char const *host = argv[2];  // Server id.
-    bool *error = malloc(sizeof(bool));  // Catches errors.
-    if (malloc_error(error) == 1){
+    bool error = false;
+    uint16_t port = read_port(argv[3], &error);
+    if (error){  // There was an error getting port.
         return 1;
     }
-
-    *error = false;
-    uint16_t port = read_port(argv[3], error);
-    if (*error){  // There was an error getting port.
-        free(error);
-        return 1;
-    }
-    free(error);
 
     char* msg = NULL;  // Whole message.
     size_t size = 0;
@@ -411,20 +383,12 @@ int main(int argc, char *argv[]) {
         sock = SOCK_DGRAM;
         prot = IPPROTO_UDP;
     }
-    error = malloc(sizeof(bool));  // Catches errors.
-    if (malloc_error(error) == 1){
+    error = false;
+    struct sockaddr_in server_address = get_server_address(host, port, &error, AF_INET, sock, prot);
+    if (error){  // There was an error getting server address.
         free(msg);
         return 1;
     }
-    *error = false;
-
-    struct sockaddr_in server_address = get_server_address(host, port, error, AF_INET, sock, prot);
-    if (*error){  // There was an error getting server address.
-        free(error);
-        free(msg);
-        return 1;
-    }
-    free(error);
 
     int socket_fd = socket(AF_INET, sock, 0);
     if (socket_fd < 0) {  // There was an error creating a socket.
