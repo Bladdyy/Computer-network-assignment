@@ -1,17 +1,29 @@
 #include "common.h"
 
-
-// Creates pack with given data.
-void create_pack(package* pack, uint8_t id, uint64_t sess_id, uint8_t prot, uint64_t len, uint64_t pack_id, uint32_t byte_len){
-    pack = memset(pack, 0, sizeof(package));  // Initializing  memory.
-    pack->id = id;
+// Creates conn pack with given data.
+void create_conn(conn *pack, uint64_t sess_id, uint8_t prot, uint64_t len){
     pack->session_id = sess_id;
     pack->protocol = prot;
     pack->length = htobe64(len);
+}
+
+// Creates base pack with given data.
+void create_base(base *pack, uint64_t sess_id){
+    pack->session_id = sess_id;
+}
+
+// Creates data pack with given data.
+void create_data(data_msg *pack, uint64_t sess_id, uint64_t pack_id, uint32_t byte_len){
+    pack->session_id = sess_id;
     pack->pack_id = htobe64(pack_id);
     pack->byte_len = htobe32(byte_len);
 }
 
+// Creates status pack with given data.
+void create_status(status *pack, uint64_t sess_id, uint64_t pack_id){
+    pack->session_id = sess_id;
+    pack->pack_id = htobe64(pack_id);
+}
 
 // Checks if malloc allocated spacer on 'pointer'.
 int malloc_error(void* pointer){
