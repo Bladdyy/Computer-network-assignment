@@ -364,12 +364,12 @@ int main(int argc, char *argv[]) {
     long long code = getdelim(&msg, &size, EOF, stdin);
     if (code == -1) {  // Error while reading message.
         free(msg);
-        fprintf(stderr, "Couldn't read message.\n");
+        fprintf(stderr, "ERROR: Couldn't read message.\n");
         return 1;
     }
     if (code == 0){  // Empty message.
         free(msg);
-        fprintf(stderr, "Empty message won't be send.\n");
+        fprintf(stderr, "ERROR: Empty message won't be send.\n");
         return 1;
     }
 
