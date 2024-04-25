@@ -147,10 +147,10 @@ int udp_server(int socket_fd){
 
     // Handling clients.
     for (;;) {
-        static char buff[BUFFOR_SIZE + sizeof(data_msg)];  // Buffer for protocol ID.
+        static char buff[BUFFOR_SIZE + sizeof(data_msg) + sizeof(uint8_t)];  // Buffer for protocol ID.
         struct sockaddr_in client_address;
         socklen_t address_length = (socklen_t) sizeof(client_address);
-        ssize_t received_length = recvfrom(socket_fd, buff, sizeof(data_msg) + BUFFOR_SIZE, 0,
+        ssize_t received_length = recvfrom(socket_fd, buff, sizeof(data_msg) + BUFFOR_SIZE + sizeof(uint8_t), 0,
                                            (struct sockaddr *) &client_address, &address_length);
         if (received_length < 0) {
             // If there is udpr client connected but no message has been received in 'MAX_WAIT' seconds.
@@ -216,7 +216,7 @@ int udp_server(int socket_fd){
                 received.session_id = received.session_id;
                 received.pack_id = be64toh(received.pack_id);
                 received.byte_len = be32toh(received.byte_len);
-                if (sess_id == received.session_id){
+                if (sess_id == received.session_id && received.byte_len <= BUFFOR_SIZE && received.byte_len <= unpack){
                     char* msg = malloc(received.byte_len);
                     if (malloc_error(msg) == 0){
                         memcpy(msg, buff + sizeof(data_msg) + sizeof(uint8_t), received.byte_len);
@@ -225,11 +225,17 @@ int udp_server(int socket_fd){
                     }
                 }
                 else{
-                    fprintf(stderr, "ERROR: Different user tried to send package.\n");
                     status to_send;
                     create_status(&to_send, received.session_id, received.pack_id);  // RJT
                     if (send_pack(6, socket_fd, &to_send, sizeof(status), client_address, address_length) == 1){ // Sends RJT.
                         fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
+                    }
+                    if (sess_id != received.session_id){
+                        fprintf(stderr, "ERROR: Not connected client tried to send DATA package.\n");
+                    }
+                    else{
+                        fprintf(stderr, "ERROR: Client sent package with incorrect size.\n");
+                        to_default(&last, &udpr, &trials, &connected);
                     }
                 }
             }
@@ -307,7 +313,7 @@ int tcp_handle(int socket_fd, uint64_t *sess_id, uint64_t *size, uint8_t demande
             }
             received.pack_id = be64toh(received.pack_id);
             received.byte_len = be32toh(received.byte_len);
-            if (*sess_id == received.session_id && pack_id == received.pack_id){
+            if (*sess_id == received.session_id && pack_id == received.pack_id && received.byte_len <= BUFFOR_SIZE && received.byte_len <= *size){
                 if (tcp_data(socket_fd, received.byte_len, size) == 1){  // Handles newly received data.
                     return 1;
                 }
@@ -317,8 +323,11 @@ int tcp_handle(int socket_fd, uint64_t *sess_id, uint64_t *size, uint8_t demande
                 if (*sess_id != received.session_id){  // Incorrect session ID.
                     fprintf(stderr, "ERROR: Wrong session id in DATA package.\n");
                 }
-                else{  // Incorrect pack ID.
+                else if (pack_id != received.pack_id){  // Incorrect pack ID.
                     fprintf(stderr, "ERROR: Wrong data id in DATA package.\n");
+                }
+                else{
+                    fprintf(stderr, "ERROR: Client sent data package with incorrect size.\n");
                 }
                 static char to_send[sizeof(uint8_t) + sizeof(status)];
                 uint8_t id = 6;
