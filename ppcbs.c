@@ -215,13 +215,13 @@ int udp_server(int socket_fd){
                     connected = true;
                 }
             }
-            else if (connected && id == 4){  // DATA.
+            else if (id == 4){  // DATA.
                 data_msg received;
                 memcpy(&received, buff + sizeof(uint8_t), sizeof(data_msg));
                 received.session_id = received.session_id;
                 received.pack_id = be64toh(received.pack_id);
                 received.byte_len = be32toh(received.byte_len);
-                if (sess_id == received.session_id && received.byte_len <= BUFFOR_SIZE){
+                if (connected && sess_id == received.session_id && received.byte_len <= BUFFOR_SIZE){
                     char* msg = malloc(received.byte_len);
                     if (malloc_error(msg) == 0){
                         memcpy(msg, buff + sizeof(data_msg) + sizeof(uint8_t), received.byte_len);
@@ -235,7 +235,10 @@ int udp_server(int socket_fd){
                     if (send_pack(6, socket_fd, &to_send, sizeof(status), client_address, address_length) == 1){ // Sends RJT.
                         fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
                     }
-                    if (sess_id != received.session_id){
+                    if (!connected){
+                        fprintf(stderr, "ERROR: Not connected user tried to send a package.\n");
+                    }
+                    else if (sess_id != received.session_id){
                         fprintf(stderr, "ERROR: Not connected client tried to send DATA package.\n");
                     }
                     else{
@@ -244,11 +247,8 @@ int udp_server(int socket_fd){
                     }
                 }
             }
-            else if (!connected){
-                fprintf(stderr, "ERROR: Not connected user tried to send a package.\n");
-            }
             else{  // Currently connected client with wrong ID package.
-                fprintf(stderr, "ERROR: Currently connected client sent package with incorrect ID.\n");
+                fprintf(stderr, "ERROR: Incorrect package ID received.\n");
                 to_default(&last, &udpr, &trials, &connected);  // Disconnecting user.
             }
         }
