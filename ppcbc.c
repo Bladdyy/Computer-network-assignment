@@ -291,7 +291,7 @@ int tcp_conn(char *msg, uint64_t len, int socket_fd, uint64_t sess_id){
     static char data[sizeof(uint8_t) + sizeof(conn)];
     uint8_t id = 1;
     conn pack;
-    create_conn(&pack, sess_id, 3, len);  // CONN.
+    create_conn(&pack, sess_id, 1, len);  // CONN.
     memcpy(data, &id, sizeof(uint8_t));
     memcpy(data + sizeof(uint8_t), &pack, sizeof(conn));
     if (tcp_write(socket_fd, data, sizeof(uint8_t) + sizeof(conn)) == 1){  // Sending CONN.

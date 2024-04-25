@@ -297,7 +297,7 @@ int tcp_handle(int socket_fd, uint64_t *sess_id, uint64_t *size, uint8_t demande
             if (tcp_read(socket_fd, &received, sizeof(conn)) == 1){  // Reads new package information.
                 return 1;
             }
-            if (received.protocol != 3){  // Not TCP.
+            if (received.protocol != 1){  // Not TCP.
                 fprintf(stderr, "ERROR: Wrong protocol.\n");
                 return 1;
             }
