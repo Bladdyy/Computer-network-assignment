@@ -60,6 +60,11 @@ int DATA_handler(void* msg, uint64_t *unpack, uint64_t *last, bool *udpr, bool *
             fprintf(stderr, "ERROR: Couldn't sent RJT.\n");
         }
     }
+    // If package size is bigger than size left to read, and it is not a retransmission.
+    else if (prot.byte_len > *unpack && prot.pack_id == *last){
+        fprintf(stderr, "ERROR: Client sent package with incorrect size.\n");
+        to_default(last, udpr, trials, connected);
+    }
     else if (!(*last > prot.pack_id && *udpr)){  // Protocol is correct.
         if (write(STDOUT_FILENO, msg, prot.byte_len) < 0){   // Writing message to stdout.
             fflush(stdout);
@@ -216,7 +221,7 @@ int udp_server(int socket_fd){
                 received.session_id = received.session_id;
                 received.pack_id = be64toh(received.pack_id);
                 received.byte_len = be32toh(received.byte_len);
-                if (sess_id == received.session_id && received.byte_len <= BUFFOR_SIZE && received.byte_len <= unpack){
+                if (sess_id == received.session_id && received.byte_len <= BUFFOR_SIZE){
                     char* msg = malloc(received.byte_len);
                     if (malloc_error(msg) == 0){
                         memcpy(msg, buff + sizeof(data_msg) + sizeof(uint8_t), received.byte_len);
