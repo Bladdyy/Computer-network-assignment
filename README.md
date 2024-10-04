@@ -1,5 +1,5 @@
-THE ASSIGNMENT
-
+##THE ASSIGNMENT
+------------
 Protokół Przesyłania Ciągów Bajtów
 Zadanie polega na zaimplementowaniu poniżej opisanego protokołu oraz na wykonaniu testów wydajności swojej implementacji w różnych warunkach sieciowych.
 
